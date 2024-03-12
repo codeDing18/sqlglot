@@ -205,6 +205,7 @@ class TestOptimizer(unittest.TestCase):
             optimizer.qualify_tables.qualify_tables,
             db="db",
             catalog="c",
+            set_dialect=True,
         )
 
     def test_normalize(self):
@@ -285,10 +286,21 @@ class TestOptimizer(unittest.TestCase):
             "SELECT `test`.`bar_bazfoo_$id` AS `bar_bazfoo_$id` FROM `test` AS `test`",
         )
 
+        qualified = optimizer.qualify.qualify(
+            parse_one("WITH t AS (SELECT 1 AS c) (SELECT c FROM t)")
+        )
+        self.assertIs(qualified.selects[0].parent, qualified.this)
+        self.assertEqual(
+            qualified.sql(),
+            'WITH "t" AS (SELECT 1 AS "c") (SELECT "t"."c" AS "c" FROM "t" AS "t")',
+        )
+
         self.check_file(
             "qualify_columns", qualify_columns, execute=True, schema=self.schema, set_dialect=True
         )
-        self.check_file("qualify_columns_ddl", qualify_columns, schema=self.schema)
+        self.check_file(
+            "qualify_columns_ddl", qualify_columns, schema=self.schema, set_dialect=True
+        )
 
     def test_qualify_columns__with_invisible(self):
         schema = MappingSchema(self.schema, {"x": {"a"}, "y": {"b"}, "z": {"b"}})
@@ -347,6 +359,26 @@ class TestOptimizer(unittest.TestCase):
 
         self.assertEqual("CONCAT('a', x, 'bc')", simplified_concat.sql(dialect="presto"))
         self.assertEqual("CONCAT('a', x, 'bc')", simplified_safe_concat.sql())
+
+        anon_unquoted_str = parse_one("anonymous(x, y)")
+        self.assertEqual(optimizer.simplify.gen(anon_unquoted_str), "ANONYMOUS x,y")
+
+        query = parse_one("SELECT x FROM t")
+        self.assertEqual(optimizer.simplify.gen(query), optimizer.simplify.gen(query.copy()))
+
+        anon_unquoted_identifier = exp.Anonymous(
+            this=exp.to_identifier("anonymous"), expressions=[exp.column("x"), exp.column("y")]
+        )
+        self.assertEqual(optimizer.simplify.gen(anon_unquoted_identifier), "ANONYMOUS x,y")
+
+        anon_quoted = parse_one('"anonymous"(x, y)')
+        self.assertEqual(optimizer.simplify.gen(anon_quoted), '"anonymous" x,y')
+
+        with self.assertRaises(ValueError) as e:
+            anon_invalid = exp.Anonymous(this=5)
+            optimizer.simplify.gen(anon_invalid)
+
+        self.assertIn("Anonymous.this expects a str or an Identifier, got 'int'.", str(e.exception))
 
     def test_unnest_subqueries(self):
         self.check_file(
@@ -448,6 +480,15 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
         )
 
     def test_scope(self):
+        many_unions = parse_one(" UNION ALL ".join(["SELECT x FROM t"] * 10000))
+        scopes_using_traverse = list(build_scope(many_unions).traverse())
+        scopes_using_traverse_scope = traverse_scope(many_unions)
+        self.assertEqual(len(scopes_using_traverse), len(scopes_using_traverse_scope))
+        assert all(
+            x.expression is y.expression
+            for x, y in zip(scopes_using_traverse, scopes_using_traverse_scope)
+        )
+
         sql = """
         WITH q AS (
           SELECT x.b FROM x
@@ -639,6 +680,14 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
 
         self.assertEqual(expressions[0].type.this, exp.DataType.Type.BIGINT)
         self.assertEqual(expressions[1].type.this, exp.DataType.Type.DOUBLE)
+
+        expressions = annotate_types(
+            parse_one("SELECT SUM(2 / 3), CAST(2 AS DECIMAL) / 3", dialect="mysql")
+        ).expressions
+
+        self.assertEqual(expressions[0].type.this, exp.DataType.Type.DOUBLE)
+        self.assertEqual(expressions[0].this.type.this, exp.DataType.Type.DOUBLE)
+        self.assertEqual(expressions[1].type.this, exp.DataType.Type.DECIMAL)
 
     def test_bracket_annotation(self):
         expression = annotate_types(parse_one("SELECT A[:]")).expressions[0]
@@ -1012,6 +1061,22 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
 
         self.assertEqual(exp.DataType.Type.USERDEFINED, expression.selects[0].type.this)
         self.assertEqual(expression.selects[0].type.sql(dialect="postgres"), "IPADDRESS")
+
+    def test_unnest_annotation(self):
+        expression = annotate_types(
+            optimizer.qualify.qualify(
+                parse_one(
+                    """
+                SELECT a, a.b, a.b.c FROM x, UNNEST(x.a) AS a
+                """,
+                    read="bigquery",
+                )
+            ),
+            schema={"x": {"a": "ARRAY<STRUCT<b STRUCT<c int>>>"}},
+        )
+        self.assertEqual(expression.selects[0].type, exp.DataType.build("STRUCT<b STRUCT<c int>>"))
+        self.assertEqual(expression.selects[1].type, exp.DataType.build("STRUCT<c int>"))
+        self.assertEqual(expression.selects[2].type, exp.DataType.build("int"))
 
     def test_recursive_cte(self):
         query = parse_one(

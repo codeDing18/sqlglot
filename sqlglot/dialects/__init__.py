@@ -61,6 +61,7 @@ dialect implementations in order to understand how their various components can 
 ----
 """
 
+from sqlglot.dialects.athena import Athena
 from sqlglot.dialects.bigquery import BigQuery
 from sqlglot.dialects.clickhouse import ClickHouse
 from sqlglot.dialects.databricks import Databricks
@@ -73,6 +74,7 @@ from sqlglot.dialects.mysql import MySQL
 from sqlglot.dialects.oracle import Oracle
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.dialects.presto import Presto
+from sqlglot.dialects.prql import PRQL
 from sqlglot.dialects.redshift import Redshift
 from sqlglot.dialects.snowflake import Snowflake
 from sqlglot.dialects.spark import Spark

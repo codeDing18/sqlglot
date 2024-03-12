@@ -6,6 +6,21 @@ class TestClickhouse(Validator):
     dialect = "clickhouse"
 
     def test_clickhouse(self):
+        self.validate_all(
+            "SELECT * FROM x PREWHERE y = 1 WHERE z = 2",
+            write={
+                "": "SELECT * FROM x WHERE z = 2",
+                "clickhouse": "SELECT * FROM x PREWHERE y = 1 WHERE z = 2",
+            },
+        )
+        self.validate_all(
+            "SELECT * FROM x AS prewhere",
+            read={
+                "clickhouse": "SELECT * FROM x AS prewhere",
+                "duckdb": "SELECT * FROM x prewhere",
+            },
+        )
+
         self.validate_identity("SELECT * FROM x LIMIT 1 UNION ALL SELECT * FROM y")
 
         string_types = [
@@ -77,6 +92,7 @@ class TestClickhouse(Validator):
         self.validate_identity("""SELECT JSONExtractString('{"x": {"y": 1}}', 'x', 'y')""")
         self.validate_identity("SELECT * FROM table LIMIT 1 BY a, b")
         self.validate_identity("SELECT * FROM table LIMIT 2 OFFSET 1 BY a, b")
+
         self.validate_identity(
             "SELECT $1$foo$1$",
             "SELECT 'foo'",
@@ -134,6 +150,9 @@ class TestClickhouse(Validator):
         self.validate_identity(
             "CREATE MATERIALIZED VIEW test_view (id UInt8) TO db.table1 AS SELECT * FROM test_data"
         )
+        self.validate_identity("TRUNCATE TABLE t1 ON CLUSTER test_cluster")
+        self.validate_identity("TRUNCATE DATABASE db")
+        self.validate_identity("TRUNCATE DATABASE db ON CLUSTER test_cluster")
 
         self.validate_all(
             "SELECT arrayJoin([1,2,3])",
@@ -373,6 +392,7 @@ class TestClickhouse(Validator):
 
     def test_cte(self):
         self.validate_identity("WITH 'x' AS foo SELECT foo")
+        self.validate_identity("WITH ['c'] AS field_names SELECT field_names")
         self.validate_identity("WITH SUM(bytes) AS foo SELECT foo FROM system.parts")
         self.validate_identity("WITH (SELECT foo) AS bar SELECT bar + 5")
         self.validate_identity("WITH test1 AS (SELECT i + 1, j + 1 FROM test1) SELECT * FROM test1")

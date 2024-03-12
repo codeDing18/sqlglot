@@ -140,6 +140,15 @@ def _str_to_unix_sql(self: Hive.Generator, expression: exp.StrToUnix) -> str:
     return self.func("UNIX_TIMESTAMP", expression.this, time_format("hive")(self, expression))
 
 
+def _unix_to_time_sql(self: Hive.Generator, expression: exp.UnixToTime) -> str:
+    timestamp = self.sql(expression, "this")
+    scale = expression.args.get("scale")
+    if scale in (None, exp.UnixToTime.SECONDS):
+        return rename_func("FROM_UNIXTIME")(self, expression)
+
+    return f"FROM_UNIXTIME({timestamp} / POW(10, {scale}))"
+
+
 def _str_to_date_sql(self: Hive.Generator, expression: exp.StrToDate) -> str:
     this = self.sql(expression, "this")
     time_format = self.format_time(expression)
@@ -422,6 +431,7 @@ class Hive(Dialect):
         NVL2_SUPPORTED = False
         LAST_DAY_SUPPORTS_DATE_PART = False
         JSON_PATH_SINGLE_QUOTE_ESCAPE = True
+        SUPPORTS_TO_NUMBER = False
 
         EXPRESSIONS_WITHOUT_NESTED_CTES = {
             exp.Insert,
@@ -463,7 +473,7 @@ class Hive(Dialect):
             exp.ArgMax: arg_max_or_min_no_count("MAX_BY"),
             exp.ArgMin: arg_max_or_min_no_count("MIN_BY"),
             exp.ArrayConcat: rename_func("CONCAT"),
-            exp.ArrayJoin: lambda self, e: self.func("CONCAT_WS", e.expression, e.this),
+            exp.ArrayToString: lambda self, e: self.func("CONCAT_WS", e.expression, e.this),
             exp.ArraySize: rename_func("SIZE"),
             exp.ArraySort: _array_sort_sql,
             exp.With: no_recursive_cte_sql,
@@ -536,7 +546,7 @@ class Hive(Dialect):
             exp.UnixToStr: lambda self, e: self.func(
                 "FROM_UNIXTIME", e.this, time_format("hive")(self, e)
             ),
-            exp.UnixToTime: rename_func("FROM_UNIXTIME"),
+            exp.UnixToTime: _unix_to_time_sql,
             exp.UnixToTimeStr: rename_func("FROM_UNIXTIME"),
             exp.PartitionedByProperty: lambda self, e: f"PARTITIONED BY {self.sql(e, 'this')}",
             exp.SerdeProperties: lambda self, e: self.properties(e, prefix="WITH SERDEPROPERTIES"),
@@ -609,9 +619,8 @@ class Hive(Dialect):
             return self.properties(properties, prefix=self.seg("TBLPROPERTIES"))
 
         def datatype_sql(self, expression: exp.DataType) -> str:
-            if (
-                expression.this in (exp.DataType.Type.VARCHAR, exp.DataType.Type.NVARCHAR)
-                and not expression.expressions
+            if expression.this in self.PARAMETERIZABLE_TEXT_TYPES and (
+                not expression.expressions or expression.expressions[0].name == "MAX"
             ):
                 expression = exp.DataType.build("text")
             elif expression.is_type(exp.DataType.Type.TEXT) and expression.expressions:
@@ -631,3 +640,15 @@ class Hive(Dialect):
         def version_sql(self, expression: exp.Version) -> str:
             sql = super().version_sql(expression)
             return sql.replace("FOR ", "", 1)
+
+        def struct_sql(self, expression: exp.Struct) -> str:
+            values = []
+
+            for i, e in enumerate(expression.expressions):
+                if isinstance(e, exp.PropertyEQ):
+                    self.unsupported("Hive does not support named structs.")
+                    values.append(e.expression)
+                else:
+                    values.append(e)
+
+            return self.func("STRUCT", *values)

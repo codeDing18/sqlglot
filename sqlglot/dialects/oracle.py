@@ -9,6 +9,7 @@ from sqlglot.dialects.dialect import (
     build_formatted_time,
     no_ilike_sql,
     rename_func,
+    to_number_with_nls_param,
     trim_sql,
 )
 from sqlglot.helper import seq_get
@@ -71,6 +72,26 @@ class Oracle(Dialect):
         "FF6": "%f",  # only 6 digits are supported in python formats
     }
 
+    class Tokenizer(tokens.Tokenizer):
+        VAR_SINGLE_TOKENS = {"@", "$", "#"}
+
+        KEYWORDS = {
+            **tokens.Tokenizer.KEYWORDS,
+            "(+)": TokenType.JOIN_MARKER,
+            "BINARY_DOUBLE": TokenType.DOUBLE,
+            "BINARY_FLOAT": TokenType.FLOAT,
+            "COLUMNS": TokenType.COLUMN,
+            "MATCH_RECOGNIZE": TokenType.MATCH_RECOGNIZE,
+            "MINUS": TokenType.EXCEPT,
+            "NVARCHAR2": TokenType.NVARCHAR,
+            "ORDER SIBLINGS BY": TokenType.ORDER_SIBLINGS_BY,
+            "SAMPLE": TokenType.TABLE_SAMPLE,
+            "START": TokenType.BEGIN,
+            "SYSDATE": TokenType.CURRENT_TIMESTAMP,
+            "TOP": TokenType.TOP,
+            "VARCHAR2": TokenType.VARCHAR,
+        }
+
     class Parser(parser.Parser):
         ALTER_TABLE_ADD_REQUIRED_FOR_EACH_COLUMN = False
         WINDOW_BEFORE_PAREN_TOKENS = {TokenType.OVER, TokenType.KEEP}
@@ -97,6 +118,21 @@ class Oracle(Dialect):
                 order=self._parse_order(),
             ),
             "XMLTABLE": lambda self: self._parse_xml_table(),
+        }
+
+        NO_PAREN_FUNCTION_PARSERS = {
+            **parser.Parser.NO_PAREN_FUNCTION_PARSERS,
+            "CONNECT_BY_ROOT": lambda self: self.expression(
+                exp.ConnectByRoot, this=self._parse_column()
+            ),
+        }
+
+        PROPERTY_PARSERS = {
+            **parser.Parser.PROPERTY_PARSERS,
+            "GLOBAL": lambda self: self._match_text_seq("TEMPORARY")
+            and self.expression(exp.TemporaryProperty, this="GLOBAL"),
+            "PRIVATE": lambda self: self._match_text_seq("TEMPORARY")
+            and self.expression(exp.TemporaryProperty, this="PRIVATE"),
         }
 
         QUERY_MODIFIER_PARSERS = {
@@ -196,6 +232,7 @@ class Oracle(Dialect):
 
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,
+            exp.ConnectByRoot: lambda self, e: f"CONNECT_BY_ROOT {self.sql(e, 'this')}",
             exp.DateStrToDate: lambda self, e: self.func(
                 "TO_DATE", e.this, exp.Literal.string("YYYY-MM-DD")
             ),
@@ -213,8 +250,10 @@ class Oracle(Dialect):
             exp.Substring: rename_func("SUBSTR"),
             exp.Table: lambda self, e: self.table_sql(e, sep=" "),
             exp.TableSample: lambda self, e: self.tablesample_sql(e, sep=" "),
+            exp.TemporaryProperty: lambda _, e: f"{e.name or 'GLOBAL'} TEMPORARY",
             exp.TimeToStr: lambda self, e: self.func("TO_CHAR", e.this, self.format_time(e)),
             exp.ToChar: lambda self, e: self.function_fallback_sql(e),
+            exp.ToNumber: to_number_with_nls_param,
             exp.Trim: trim_sql,
             exp.UnixToTime: lambda self,
             e: f"TO_DATE('1970-01-01', 'YYYY-MM-DD') + ({self.sql(e, 'this')} / 86400)",
@@ -248,23 +287,3 @@ class Oracle(Dialect):
             if len(expression.args.get("actions", [])) > 1:
                 return f"ADD ({actions})"
             return f"ADD {actions}"
-
-    class Tokenizer(tokens.Tokenizer):
-        VAR_SINGLE_TOKENS = {"@", "$", "#"}
-
-        KEYWORDS = {
-            **tokens.Tokenizer.KEYWORDS,
-            "(+)": TokenType.JOIN_MARKER,
-            "BINARY_DOUBLE": TokenType.DOUBLE,
-            "BINARY_FLOAT": TokenType.FLOAT,
-            "COLUMNS": TokenType.COLUMN,
-            "MATCH_RECOGNIZE": TokenType.MATCH_RECOGNIZE,
-            "MINUS": TokenType.EXCEPT,
-            "NVARCHAR2": TokenType.NVARCHAR,
-            "ORDER SIBLINGS BY": TokenType.ORDER_SIBLINGS_BY,
-            "SAMPLE": TokenType.TABLE_SAMPLE,
-            "START": TokenType.BEGIN,
-            "SYSDATE": TokenType.CURRENT_TIMESTAMP,
-            "TOP": TokenType.TOP,
-            "VARCHAR2": TokenType.VARCHAR,
-        }

@@ -1,6 +1,6 @@
 ![SQLGlot logo](sqlglot.svg)
 
-SQLGlot is a no-dependency SQL parser, transpiler, optimizer, and engine. It can be used to format SQL or translate between [20 different dialects](https://github.com/tobymao/sqlglot/blob/main/sqlglot/dialects/__init__.py) like [DuckDB](https://duckdb.org/), [Presto](https://prestodb.io/) / [Trino](https://trino.io/), [Spark](https://spark.apache.org/) / [Databricks](https://www.databricks.com/), [Snowflake](https://www.snowflake.com/en/), and [BigQuery](https://cloud.google.com/bigquery/). It aims to read a wide variety of SQL inputs and output syntactically and semantically correct SQL in the targeted dialects.
+SQLGlot is a no-dependency SQL parser, transpiler, optimizer, and engine. It can be used to format SQL or translate between [21 different dialects](https://github.com/tobymao/sqlglot/blob/main/sqlglot/dialects/__init__.py) like [DuckDB](https://duckdb.org/), [Presto](https://prestodb.io/) / [Trino](https://trino.io/), [Spark](https://spark.apache.org/) / [Databricks](https://www.databricks.com/), [Snowflake](https://www.snowflake.com/en/), and [BigQuery](https://cloud.google.com/bigquery/). It aims to read a wide variety of SQL inputs and output syntactically and semantically correct SQL in the targeted dialects.
 
 It is a very comprehensive generic SQL parser with a robust [test suite](https://github.com/tobymao/sqlglot/blob/main/tests/). It is also quite [performant](#benchmarks), while being written purely in Python.
 
@@ -96,7 +96,7 @@ sqlglot.transpile("SELECT EPOCH_MS(1618088028295)", read="duckdb", write="hive")
 ```
 
 ```sql
-'SELECT FROM_UNIXTIME(1618088028295 / 1000)'
+'SELECT FROM_UNIXTIME(1618088028295 / POW(10, 3))'
 ```
 
 SQLGlot can even translate custom time formats:
@@ -150,7 +150,7 @@ sql = """
 */
 SELECT
   tbl.cola /* comment 1 */ + tbl.colb /* comment 2 */,
-  CAST(x AS INT), # comment 3
+  CAST(x AS SIGNED), # comment 3
   y               -- comment 4
 FROM
   bar /* comment 5 */,
@@ -202,13 +202,13 @@ When the parser detects an error in the syntax, it raises a ParseError:
 
 ```python
 import sqlglot
-sqlglot.transpile("SELECT foo( FROM bar")
+sqlglot.transpile("SELECT foo FROM (SELECT baz FROM t")
 ```
 
 ```
-sqlglot.errors.ParseError: Expecting ). Line 1, Col: 13.
-  select foo( FROM bar
-              ~~~~
+sqlglot.errors.ParseError: Expecting ). Line 1, Col: 34.
+  SELECT foo FROM (SELECT baz FROM t
+                                   ~
 ```
 
 Structured syntax errors are accessible for programmatic use:
@@ -216,7 +216,7 @@ Structured syntax errors are accessible for programmatic use:
 ```python
 import sqlglot
 try:
-    sqlglot.transpile("SELECT foo( FROM bar")
+    sqlglot.transpile("SELECT foo FROM (SELECT baz FROM t")
 except sqlglot.errors.ParseError as e:
     print(e.errors)
 ```
@@ -225,11 +225,11 @@ except sqlglot.errors.ParseError as e:
 [{
   'description': 'Expecting )',
   'line': 1,
-  'col': 16,
-  'start_context': 'SELECT foo( ',
-  'highlight': 'FROM',
-  'end_context': ' bar',
-  'into_expression': None,
+  'col': 34,
+  'start_context': 'SELECT foo FROM (SELECT baz FROM ',
+  'highlight': 't',
+  'end_context': '',
+  'into_expression': None
 }]
 ```
 
@@ -367,7 +367,9 @@ diff(parse_one("SELECT a + b, c, d"), parse_one("SELECT c, a - b, d"))
       this=Identifier(this=a, quoted=False)),
     expression=Column(
       this=Identifier(this=b, quoted=False)))),
-  Keep(source=Identifier(this=d, quoted=False), target=Identifier(this=d, quoted=False)),
+  Keep(
+    source=Column(this=Identifier(this=a, quoted=False)),
+    target=Column(this=Identifier(this=a, quoted=False))),
   ...
 ]
 ```
@@ -492,6 +494,7 @@ make docs-serve
 ```
 make style  # Only linter checks
 make unit   # Only unit tests
+make test   # Unit and integration tests
 make check  # Full test suite & linter checks
 ```
 

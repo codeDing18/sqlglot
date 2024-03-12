@@ -302,6 +302,7 @@ class TokenType(AutoName):
     OBJECT_IDENTIFIER = auto()
     OFFSET = auto()
     ON = auto()
+    ONLY = auto()
     OPERATOR = auto()
     ORDER_BY = auto()
     ORDER_SIBLINGS_BY = auto()
@@ -316,7 +317,9 @@ class TokenType(AutoName):
     PERCENT = auto()
     PIVOT = auto()
     PLACEHOLDER = auto()
+    POSITIONAL = auto()
     PRAGMA = auto()
+    PREWHERE = auto()
     PRIMARY_KEY = auto()
     PROCEDURE = auto()
     PROPERTIES = auto()
@@ -338,6 +341,7 @@ class TokenType(AutoName):
     SELECT = auto()
     SEMI = auto()
     SEPARATOR = auto()
+    SEQUENCE = auto()
     SERDE_PROPERTIES = auto()
     SET = auto()
     SETTINGS = auto()
@@ -353,6 +357,7 @@ class TokenType(AutoName):
     TOP = auto()
     THEN = auto()
     TRUE = auto()
+    TRUNCATE = auto()
     UNCACHE = auto()
     UNION = auto()
     UNNEST = auto()
@@ -370,6 +375,7 @@ class TokenType(AutoName):
     UNIQUE = auto()
     VERSION_SNAPSHOT = auto()
     TIMESTAMP_SNAPSHOT = auto()
+    OPTION = auto()
 
 
 _ALL_TOKEN_TYPES = list(TokenType)
@@ -657,6 +663,7 @@ class Tokenizer(metaclass=_Tokenizer):
         "DROP": TokenType.DROP,
         "ELSE": TokenType.ELSE,
         "END": TokenType.END,
+        "ENUM": TokenType.ENUM,
         "ESCAPE": TokenType.ESCAPE,
         "EXCEPT": TokenType.EXCEPT,
         "EXECUTE": TokenType.EXECUTE,
@@ -752,6 +759,7 @@ class Tokenizer(metaclass=_Tokenizer):
         "TEMPORARY": TokenType.TEMPORARY,
         "THEN": TokenType.THEN,
         "TRUE": TokenType.TRUE,
+        "TRUNCATE": TokenType.TRUNCATE,
         "UNION": TokenType.UNION,
         "UNKNOWN": TokenType.UNKNOWN,
         "UNNEST": TokenType.UNNEST,
@@ -850,6 +858,7 @@ class Tokenizer(metaclass=_Tokenizer):
         "DATEMULTIRANGE": TokenType.DATEMULTIRANGE,
         "UNIQUE": TokenType.UNIQUE,
         "STRUCT": TokenType.STRUCT,
+        "SEQUENCE": TokenType.SEQUENCE,
         "VARIANT": TokenType.VARIANT,
         "ALTER": TokenType.ALTER,
         "ANALYZE": TokenType.COMMAND,
@@ -860,7 +869,6 @@ class Tokenizer(metaclass=_Tokenizer):
         "GRANT": TokenType.COMMAND,
         "OPTIMIZE": TokenType.COMMAND,
         "PREPARE": TokenType.COMMAND,
-        "TRUNCATE": TokenType.COMMAND,
         "VACUUM": TokenType.COMMAND,
         "USER-DEFINED": TokenType.USERDEFINED,
         "FOR VERSION": TokenType.VERSION_SNAPSHOT,
@@ -1036,12 +1044,6 @@ class Tokenizer(metaclass=_Tokenizer):
     def _text(self) -> str:
         return self.sql[self._start : self._current]
 
-    def peek(self, i: int = 0) -> str:
-        i = self._current + i
-        if i < self.size:
-            return self.sql[i]
-        return ""
-
     def _add(self, token_type: TokenType, text: t.Optional[str] = None) -> None:
         self._prev_token_line = self._line
 
@@ -1182,12 +1184,8 @@ class Tokenizer(metaclass=_Tokenizer):
             if self._peek.isdigit():
                 self._advance()
             elif self._peek == "." and not decimal:
-                after = self.peek(1)
-                if after.isdigit() or not after.isalpha():
-                    decimal = True
-                    self._advance()
-                else:
-                    return self._add(TokenType.VAR)
+                decimal = True
+                self._advance()
             elif self._peek in ("-", "+") and scientific == 1:
                 scientific += 1
                 self._advance()

@@ -1108,6 +1108,11 @@ class TestDialect(Validator):
         )
 
     def test_order_by(self):
+        self.validate_identity(
+            "SELECT c FROM t ORDER BY a, b,",
+            "SELECT c FROM t ORDER BY a, b",
+        )
+
         self.validate_all(
             "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
             write={
@@ -1714,6 +1719,11 @@ class TestDialect(Validator):
             with self.subTest(f"{expression.__class__.__name__} {dialect} -> {expected}"):
                 self.assertEqual(expected, expression.sql(dialect=dialect))
 
+        self.assertEqual(
+            parse_one("CAST(x AS DECIMAL) / y", read="mysql").sql(dialect="postgres"),
+            "CAST(x AS DECIMAL) / NULLIF(y, 0)",
+        )
+
     def test_limit(self):
         self.validate_all(
             "SELECT * FROM data LIMIT 10, 20",
@@ -1777,7 +1787,7 @@ class TestDialect(Validator):
             "CREATE TABLE t (c CHAR, nc NCHAR, v1 VARCHAR, v2 VARCHAR2, nv NVARCHAR, nv2 NVARCHAR2)",
             write={
                 "duckdb": "CREATE TABLE t (c TEXT, nc TEXT, v1 TEXT, v2 TEXT, nv TEXT, nv2 TEXT)",
-                "hive": "CREATE TABLE t (c CHAR, nc CHAR, v1 STRING, v2 STRING, nv STRING, nv2 STRING)",
+                "hive": "CREATE TABLE t (c STRING, nc STRING, v1 STRING, v2 STRING, nv STRING, nv2 STRING)",
                 "oracle": "CREATE TABLE t (c CHAR, nc NCHAR, v1 VARCHAR2, v2 VARCHAR2, nv NVARCHAR2, nv2 NVARCHAR2)",
                 "postgres": "CREATE TABLE t (c CHAR, nc CHAR, v1 VARCHAR, v2 VARCHAR, nv VARCHAR, nv2 VARCHAR)",
                 "sqlite": "CREATE TABLE t (c TEXT, nc TEXT, v1 TEXT, v2 TEXT, nv TEXT, nv2 TEXT)",
@@ -2300,4 +2310,44 @@ SELECT
                 "trino": "ANY_MATCH(arr, x -> pred)",
                 "tsql": UnsupportedError,
             },
+        )
+
+    def test_truncate(self):
+        self.validate_identity("TRUNCATE TABLE table")
+        self.validate_identity("TRUNCATE TABLE db.schema.test")
+        self.validate_identity("TRUNCATE TABLE IF EXISTS db.schema.test")
+        self.validate_identity("TRUNCATE TABLE t1, t2, t3")
+
+    def test_create_sequence(self):
+        self.validate_identity("CREATE SEQUENCE seq")
+        self.validate_identity(
+            "CREATE TEMPORARY SEQUENCE seq AS SMALLINT START WITH 3 INCREMENT BY 2 MINVALUE 1 MAXVALUE 10 CACHE 1 NO CYCLE OWNED BY table.col"
+        )
+        self.validate_identity(
+            "CREATE SEQUENCE seq START WITH 1 NO MINVALUE NO MAXVALUE CYCLE NO CACHE"
+        )
+        self.validate_identity("CREATE OR REPLACE TEMPORARY SEQUENCE seq INCREMENT BY 1 NO CYCLE")
+        self.validate_identity(
+            "CREATE OR REPLACE SEQUENCE IF NOT EXISTS seq COMMENT='test comment' ORDER"
+        )
+        self.validate_identity(
+            "CREATE SEQUENCE schema.seq SHARING=METADATA NOORDER NOKEEP SCALE EXTEND SHARD EXTEND SESSION"
+        )
+        self.validate_identity(
+            "CREATE SEQUENCE schema.seq SHARING=DATA ORDER KEEP NOSCALE NOSHARD GLOBAL"
+        )
+        self.validate_identity(
+            "CREATE SEQUENCE schema.seq SHARING=DATA NOCACHE NOCYCLE SCALE NOEXTEND"
+        )
+        self.validate_identity(
+            """CREATE TEMPORARY SEQUENCE seq AS BIGINT INCREMENT BY 2 MINVALUE 1 CACHE 1 NOMAXVALUE NO CYCLE OWNED BY NONE""",
+            """CREATE TEMPORARY SEQUENCE seq AS BIGINT INCREMENT BY 2 MINVALUE 1 CACHE 1 NOMAXVALUE NO CYCLE""",
+        )
+        self.validate_identity(
+            """CREATE TEMPORARY SEQUENCE seq START 1""",
+            """CREATE TEMPORARY SEQUENCE seq START WITH 1""",
+        )
+        self.validate_identity(
+            """CREATE TEMPORARY SEQUENCE seq START WITH = 1 INCREMENT BY = 2""",
+            """CREATE TEMPORARY SEQUENCE seq START WITH 1 INCREMENT BY 2""",
         )

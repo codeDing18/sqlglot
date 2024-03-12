@@ -19,6 +19,21 @@ SELECT 1 FROM x.y.z AS z;
 SELECT 1 FROM y.z AS z, z.a;
 SELECT 1 FROM c.y.z AS z, z.a;
 
+# title: bigquery implicit unnest syntax, coordinates.position should be a column, not a table
+# dialect: bigquery
+SELECT results FROM Coordinates, coordinates.position AS results;
+SELECT results FROM c.db.Coordinates AS Coordinates, UNNEST(coordinates.position) AS results;
+
+# title: bigquery implicit unnest syntax, table is already qualified
+# dialect: bigquery
+SELECT results FROM db.coordinates, Coordinates.position AS results;
+SELECT results FROM c.db.coordinates AS coordinates, UNNEST(Coordinates.position) AS results;
+
+# title: bigquery schema name clashes with CTE name - this is a join, not an implicit unnest
+# dialect: bigquery
+WITH Coordinates AS (SELECT [1, 2] AS position) SELECT results FROM Coordinates, `Coordinates.position` AS results;
+WITH Coordinates AS (SELECT [1, 2] AS position) SELECT results FROM Coordinates AS Coordinates, `c.Coordinates.position` AS results;
+
 # title: single cte
 WITH a AS (SELECT 1 FROM z) SELECT 1 FROM a;
 WITH a AS (SELECT 1 FROM c.db.z AS z) SELECT 1 FROM a AS a;
@@ -83,7 +98,7 @@ SELECT * FROM ((c.db.a AS foo CROSS JOIN c.db.b AS bar) CROSS JOIN c.db.c AS baz
 SELECT * FROM (tbl1 CROSS JOIN (SELECT * FROM tbl2) AS t1);
 SELECT * FROM (c.db.tbl1 AS tbl1 CROSS JOIN (SELECT * FROM c.db.tbl2 AS tbl2) AS t1);
 
-# title: wrapped join with subquery with alias, parentheses can't be omitted because of alias
+# title: wrapped join with subquery with alias, parentheses cant be omitted because of alias
 SELECT * FROM (tbl1 CROSS JOIN (SELECT * FROM tbl2) AS t1) AS t2;
 SELECT * FROM (SELECT * FROM c.db.tbl1 AS tbl1 CROSS JOIN (SELECT * FROM c.db.tbl2 AS tbl2) AS t1) AS t2;
 
@@ -95,7 +110,7 @@ SELECT * FROM c.db.a AS a LEFT JOIN (c.db.b AS b INNER JOIN c.db.c AS c ON c.id 
 SELECT * FROM a LEFT JOIN b INNER JOIN c ON c.id = b.id ON b.id = a.id;
 SELECT * FROM c.db.a AS a LEFT JOIN c.db.b AS b INNER JOIN c.db.c AS c ON c.id = b.id ON b.id = a.id;
 
-# title: parentheses can't be omitted because alias shadows inner table names
+# title: parentheses cant be omitted because alias shadows inner table names
 SELECT t.a FROM (tbl AS tbl) AS t;
 SELECT t.a FROM (SELECT * FROM c.db.tbl AS tbl) AS t;
 
@@ -144,5 +159,10 @@ CREATE TABLE t1 AS (WITH cte AS (SELECT x FROM t2) SELECT * FROM cte);
 CREATE TABLE c.db.t1 AS (WITH cte AS (SELECT x FROM c.db.t2 AS t2) SELECT * FROM cte AS cte);
 
 # title: insert statement with cte
+# dialect: spark
 WITH cte AS (SELECT b FROM y) INSERT INTO s SELECT * FROM cte;
 WITH cte AS (SELECT b FROM c.db.y AS y) INSERT INTO c.db.s SELECT * FROM cte AS cte;
+
+# title: qualify wrapped query
+(SELECT x FROM t);
+(SELECT x FROM c.db.t AS t);

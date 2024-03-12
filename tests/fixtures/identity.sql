@@ -196,10 +196,10 @@ SET LOCAL variable = value
 @"x"
 COMMIT
 USE db
-USE role x
-USE warehouse x
-USE database x
-USE schema x.y
+USE ROLE x
+USE WAREHOUSE x
+USE DATABASE x
+USE SCHEMA x.y
 NOT 1
 NOT NOT 1
 SELECT * FROM test
@@ -476,6 +476,7 @@ SELECT 1 UNION (SELECT 2) ORDER BY x
 SELECT * FROM (((SELECT 1) UNION SELECT 2) ORDER BY x LIMIT 1 OFFSET 1)
 SELECT * FROM ((SELECT 1 AS x) CROSS JOIN (SELECT 2 AS y)) AS z
 ((SELECT 1) EXCEPT (SELECT 2))
+((SELECT 1)) LIMIT 1
 VALUES (1) UNION SELECT * FROM x
 WITH a AS (SELECT 1) SELECT a.* FROM a
 WITH a AS (SELECT 1), b AS (SELECT 2) SELECT a.*, b.* FROM a CROSS JOIN b
@@ -643,6 +644,7 @@ DROP MATERIALIZED VIEW x.y.z
 CACHE TABLE x
 CACHE LAZY TABLE x
 CACHE LAZY TABLE x OPTIONS('storageLevel' = 'value')
+CACHE LAZY TABLE x OPTIONS(N'storageLevel' = 'value')
 CACHE LAZY TABLE x OPTIONS('storageLevel' = 'value') AS SELECT 1
 CACHE LAZY TABLE x OPTIONS('storageLevel' = 'value') AS WITH a AS (SELECT 1) SELECT a.* FROM a
 CACHE LAZY TABLE x AS WITH a AS (SELECT 1) SELECT a.* FROM a
@@ -708,6 +710,7 @@ COMMENT ON COLUMN my_schema.my_table.my_column IS 'Employee ID number'
 COMMENT ON DATABASE my_database IS 'Development Database'
 COMMENT ON PROCEDURE my_proc(integer, integer) IS 'Runs a report'
 COMMENT ON TABLE my_schema.my_table IS 'Employee Information'
+COMMENT ON TABLE my_schema.my_table IS N'National String'
 WITH a AS (SELECT 1) INSERT INTO b SELECT * FROM a
 WITH a AS (SELECT * FROM b) UPDATE a SET col = 1
 WITH a AS (SELECT * FROM b) CREATE TABLE b AS SELECT * FROM a
@@ -851,3 +854,8 @@ CAST(foo AS BPCHAR)
 values
 SELECT values
 SELECT values AS values FROM t WHERE values + 1 > 3
+SELECT truncate
+SELECT only
+TRUNCATE(a, b)
+SELECT enum
+SELECT unlogged

@@ -79,6 +79,21 @@ def _build_date_diff(args: t.List) -> exp.Expression:
     return exp.DateDiff(this=seq_get(args, 2), expression=seq_get(args, 1), unit=seq_get(args, 0))
 
 
+def _build_generate_series(end_exclusive: bool = False) -> t.Callable[[t.List], exp.GenerateSeries]:
+    def _builder(args: t.List) -> exp.GenerateSeries:
+        # Check https://duckdb.org/docs/sql/functions/nested.html#range-functions
+        if len(args) == 1:
+            # DuckDB uses 0 as a default for the series' start when it's omitted
+            args.insert(0, exp.Literal.number("0"))
+
+        gen_series = exp.GenerateSeries.from_arg_list(args)
+        gen_series.set("is_end_exclusive", end_exclusive)
+
+        return gen_series
+
+    return _builder
+
+
 def _build_make_timestamp(args: t.List) -> exp.Expression:
     if len(args) == 1:
         return exp.UnixToTime(this=seq_get(args, 0), scale=exp.UnixToTime.MICROS)
@@ -95,13 +110,13 @@ def _build_make_timestamp(args: t.List) -> exp.Expression:
 
 def _struct_sql(self: DuckDB.Generator, expression: exp.Struct) -> str:
     args: t.List[str] = []
-    for expr in expression.expressions:
-        if isinstance(expr, exp.Alias):
-            key = expr.alias
-            value = expr.this
-        else:
-            key = expr.name or expr.this.name
+    for i, expr in enumerate(expression.expressions):
+        if isinstance(expr, exp.PropertyEQ):
+            key = expr.name
             value = expr.expression
+        else:
+            key = f"_{i}"
+            value = expr
 
         args.append(f"{self.sql(exp.Literal.string(key))}: {self.sql(value)}")
 
@@ -148,13 +163,6 @@ def _rename_unless_within_group(
     )
 
 
-def _build_struct_pack(args: t.List) -> exp.Struct:
-    args_with_columns_as_identifiers = [
-        exp.PropertyEQ(this=arg.this.this, expression=arg.expression) for arg in args
-    ]
-    return exp.Struct.from_arg_list(args_with_columns_as_identifiers)
-
-
 class DuckDB(Dialect):
     NULL_ORDERING = "nulls_are_last"
     SUPPORTS_USER_DEFINED_TYPES = False
@@ -189,7 +197,9 @@ class DuckDB(Dialect):
             "CHARACTER VARYING": TokenType.TEXT,
             "EXCLUDE": TokenType.EXCEPT,
             "LOGICAL": TokenType.BOOLEAN,
+            "ONLY": TokenType.ONLY,
             "PIVOT_WIDER": TokenType.PIVOT,
+            "POSITIONAL": TokenType.POSITIONAL,
             "SIGNED": TokenType.INT,
             "STRING": TokenType.VARCHAR,
             "UBIGINT": TokenType.UBIGINT,
@@ -213,11 +223,13 @@ class DuckDB(Dialect):
             TokenType.TILDA: exp.RegexpLike,
         }
 
+        FUNCTIONS_WITH_ALIASED_ARGS = {*parser.Parser.FUNCTIONS_WITH_ALIASED_ARGS, "STRUCT_PACK"}
+
         FUNCTIONS = {
             **parser.Parser.FUNCTIONS,
             "ARRAY_HAS": exp.ArrayContains.from_arg_list,
-            "ARRAY_SORT": exp.SortArray.from_arg_list,
             "ARRAY_REVERSE_SORT": _build_sort_array_desc,
+            "ARRAY_SORT": exp.SortArray.from_arg_list,
             "DATEDIFF": _build_date_diff,
             "DATE_DIFF": _build_date_diff,
             "DATE_TRUNC": date_trunc_to_time,
@@ -261,12 +273,14 @@ class DuckDB(Dialect):
             "STRING_SPLIT_REGEX": exp.RegexpSplit.from_arg_list,
             "STRING_TO_ARRAY": exp.Split.from_arg_list,
             "STRPTIME": build_formatted_time(exp.StrToTime, "duckdb"),
-            "STRUCT_PACK": _build_struct_pack,
+            "STRUCT_PACK": exp.Struct.from_arg_list,
             "STR_SPLIT": exp.Split.from_arg_list,
             "STR_SPLIT_REGEX": exp.RegexpSplit.from_arg_list,
             "TO_TIMESTAMP": exp.UnixToTime.from_arg_list,
             "UNNEST": exp.Explode.from_arg_list,
             "XOR": binary_from_function(exp.BitwiseXor),
+            "GENERATE_SERIES": _build_generate_series(),
+            "RANGE": _build_generate_series(end_exclusive=True),
         }
 
         FUNCTION_PARSERS = parser.Parser.FUNCTION_PARSERS.copy()
@@ -332,6 +346,7 @@ class DuckDB(Dialect):
         SUPPORTS_CREATE_TABLE_LIKE = False
         MULTI_ARG_DISTINCT = False
         CAN_IMPLEMENT_ARRAY_ANY = True
+        SUPPORTS_TO_NUMBER = False
 
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,
@@ -548,3 +563,11 @@ class DuckDB(Dialect):
                 return super().join_sql(expression.on(exp.true()))
 
             return super().join_sql(expression)
+
+        def generateseries_sql(self, expression: exp.GenerateSeries) -> str:
+            # GENERATE_SERIES(a, b) -> [a, b], RANGE(a, b) -> [a, b)
+            if expression.args.get("is_end_exclusive"):
+                expression.set("is_end_exclusive", None)
+                return rename_func("RANGE")(self, expression)
+
+            return super().generateseries_sql(expression)

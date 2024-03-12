@@ -1,5 +1,6 @@
 from sqlglot import ErrorLevel, UnsupportedError, exp, parse_one, transpile
 from sqlglot.helper import logger as helper_logger
+from sqlglot.optimizer.annotate_types import annotate_types
 from tests.dialects.test_dialect import Validator
 
 
@@ -7,13 +8,40 @@ class TestDuckDB(Validator):
     dialect = "duckdb"
 
     def test_duckdb(self):
-        self.validate_identity(
-            "SELECT * FROM x LEFT JOIN UNNEST(y)", "SELECT * FROM x LEFT JOIN UNNEST(y) ON TRUE"
+        query = "WITH _data AS (SELECT [{'a': 1, 'b': 2}, {'a': 2, 'b': 3}] AS col) SELECT t.col['b'] FROM _data, UNNEST(_data.col) AS t(col) WHERE t.col['a'] = 1"
+        expr = annotate_types(self.validate_identity(query))
+        self.assertEqual(
+            expr.sql(dialect="bigquery"),
+            "WITH _data AS (SELECT [STRUCT(1 AS a, 2 AS b), STRUCT(2 AS a, 3 AS b)] AS col) SELECT col.b FROM _data, UNNEST(_data.col) AS col WHERE col.a = 1",
         )
-        struct_pack = parse_one('STRUCT_PACK("a b" := 1)', read="duckdb")
-        self.assertIsInstance(struct_pack.expressions[0].this, exp.Identifier)
-        self.assertEqual(struct_pack.sql(dialect="duckdb"), "{'a b': 1}")
 
+        self.validate_all(
+            'STRUCT_PACK("a b" := 1)',
+            write={
+                "duckdb": "{'a b': 1}",
+                "spark": "STRUCT(1 AS `a b`)",
+                "snowflake": "OBJECT_CONSTRUCT('a b', 1)",
+            },
+        )
+        self.validate_all(
+            "ARRAY_TO_STRING(arr, delim)",
+            read={
+                "bigquery": "ARRAY_TO_STRING(arr, delim)",
+                "postgres": "ARRAY_TO_STRING(arr, delim)",
+                "presto": "ARRAY_JOIN(arr, delim)",
+                "snowflake": "ARRAY_TO_STRING(arr, delim)",
+                "spark": "ARRAY_JOIN(arr, delim)",
+            },
+            write={
+                "bigquery": "ARRAY_TO_STRING(arr, delim)",
+                "duckdb": "ARRAY_TO_STRING(arr, delim)",
+                "postgres": "ARRAY_TO_STRING(arr, delim)",
+                "presto": "ARRAY_JOIN(arr, delim)",
+                "snowflake": "ARRAY_TO_STRING(arr, delim)",
+                "spark": "ARRAY_JOIN(arr, delim)",
+                "tsql": "STRING_AGG(arr, delim)",
+            },
+        )
         self.validate_all(
             "SELECT SUM(X) OVER (ORDER BY x)",
             write={
@@ -55,8 +83,21 @@ class TestDuckDB(Validator):
             exp.select("*").from_("t").offset(exp.select("5").subquery()).sql(dialect="duckdb"),
         )
 
-        for struct_value in ("{'a': 1}", "struct_pack(a := 1)"):
-            self.validate_all(struct_value, write={"presto": UnsupportedError})
+        self.validate_all(
+            "{'a': 1, 'b': '2'}", write={"presto": "CAST(ROW(1, '2') AS ROW(a INTEGER, b VARCHAR))"}
+        )
+        self.validate_all(
+            "struct_pack(a := 1, b := 2)",
+            write={"presto": "CAST(ROW(1, 2) AS ROW(a INTEGER, b INTEGER))"},
+        )
+
+        self.validate_all(
+            "struct_pack(a := 1, b := x)",
+            write={
+                "duckdb": "{'a': 1, 'b': x}",
+                "presto": UnsupportedError,
+            },
+        )
 
         for join_type in ("SEMI", "ANTI"):
             exists = "EXISTS" if join_type == "SEMI" else "NOT EXISTS"
@@ -116,13 +157,6 @@ class TestDuckDB(Validator):
             },
         )
         self.validate_all(
-            "WITH _data AS (SELECT [{'a': 1, 'b': 2}, {'a': 2, 'b': 3}] AS col) SELECT (SELECT col['b'] FROM UNNEST(col) AS t(col) WHERE col['a'] = 1) FROM _data",
-            write={
-                "bigquery": "WITH _data AS (SELECT [STRUCT(1 AS a, 2 AS b), STRUCT(2 AS a, 3 AS b)] AS col) SELECT (SELECT col.b FROM UNNEST(col) AS col WHERE col.a = 1) FROM _data",
-                "duckdb": "WITH _data AS (SELECT [{'a': 1, 'b': 2}, {'a': 2, 'b': 3}] AS col) SELECT (SELECT col['b'] FROM UNNEST(col) AS t(col) WHERE col['a'] = 1) FROM _data",
-            },
-        )
-        self.validate_all(
             "SELECT {'bla': column1, 'foo': column2, 'bar': column3} AS data FROM source_table",
             read={
                 "bigquery": "SELECT STRUCT(column1 AS bla, column2 AS foo, column3 AS bar) AS data FROM source_table",
@@ -174,7 +208,6 @@ class TestDuckDB(Validator):
             },
         )
 
-        self.validate_identity("SELECT i FROM RANGE(5) AS _(i) ORDER BY i ASC")
         self.validate_identity("INSERT INTO x BY NAME SELECT 1 AS y")
         self.validate_identity("SELECT 1 AS x UNION ALL BY NAME SELECT 2 AS x")
         self.validate_identity("SELECT SUM(x) FILTER (x = 1)", "SELECT SUM(x) FILTER(WHERE x = 1)")
@@ -187,6 +220,7 @@ class TestDuckDB(Validator):
             parse_one("a // b", read="duckdb").assert_is(exp.IntDiv).sql(dialect="duckdb"), "a // b"
         )
 
+        self.validate_identity("SELECT df1.*, df2.* FROM df1 POSITIONAL JOIN df2")
         self.validate_identity("MAKE_TIMESTAMP(1992, 9, 20, 13, 34, 27.123456)")
         self.validate_identity("MAKE_TIMESTAMP(1667810584123456)")
         self.validate_identity("SELECT EPOCH_MS(10) AS t")
@@ -212,6 +246,10 @@ class TestDuckDB(Validator):
         self.validate_identity("FROM (FROM tbl)", "SELECT * FROM (SELECT * FROM tbl)")
         self.validate_identity("FROM tbl", "SELECT * FROM tbl")
         self.validate_identity("x -> '$.family'")
+        self.validate_identity("CREATE TABLE color (name ENUM('RED', 'GREEN', 'BLUE'))")
+        self.validate_identity(
+            "SELECT * FROM x LEFT JOIN UNNEST(y)", "SELECT * FROM x LEFT JOIN UNNEST(y) ON TRUE"
+        )
         self.validate_identity(
             """SELECT '{"foo": [1, 2, 3]}' -> 'foo' -> 0""",
             """SELECT '{"foo": [1, 2, 3]}' -> '$.foo' -> '$[0]'""",
@@ -624,6 +662,27 @@ class TestDuckDB(Validator):
                 "duckdb": "SELECT COUNT_IF(x)",
                 "bigquery": "SELECT COUNTIF(x)",
             },
+        )
+
+        self.validate_identity("SELECT * FROM RANGE(1, 5, 10)")
+        self.validate_identity("SELECT * FROM GENERATE_SERIES(2, 13, 4)")
+
+        self.validate_all(
+            "WITH t AS (SELECT i, i * i * i * i * i AS i5 FROM RANGE(1, 5) t(i)) SELECT * FROM t",
+            write={
+                "duckdb": "WITH t AS (SELECT i, i * i * i * i * i AS i5 FROM RANGE(1, 5) AS t(i)) SELECT * FROM t",
+                "sqlite": "WITH t AS (SELECT i, i * i * i * i * i AS i5 FROM (SELECT value AS i FROM GENERATE_SERIES(1, 5)) AS t) SELECT * FROM t",
+            },
+        )
+
+        self.validate_identity(
+            """SELECT i FROM RANGE(5) AS _(i) ORDER BY i ASC""",
+            """SELECT i FROM RANGE(0, 5) AS _(i) ORDER BY i ASC""",
+        )
+
+        self.validate_identity(
+            """SELECT i FROM GENERATE_SERIES(12) AS _(i) ORDER BY i ASC""",
+            """SELECT i FROM GENERATE_SERIES(0, 12) AS _(i) ORDER BY i ASC""",
         )
 
     def test_array_index(self):

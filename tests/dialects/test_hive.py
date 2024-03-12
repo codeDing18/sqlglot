@@ -440,6 +440,9 @@ class TestHive(Validator):
         self.validate_identity(
             "SELECT key, value, GROUPING__ID, COUNT(*) FROM T1 GROUP BY key, value WITH ROLLUP"
         )
+        self.validate_identity(
+            "TRUNCATE TABLE t1 PARTITION(age = 10, name = 'test', address = 'abc')"
+        )
 
         self.validate_all(
             "SELECT ${hiveconf:some_var}",
@@ -609,12 +612,6 @@ class TestHive(Validator):
                 "presto": "JSON_EXTRACT_SCALAR(x, '$.name')",
                 "hive": "GET_JSON_OBJECT(x, '$.name')",
                 "spark": "GET_JSON_OBJECT(x, '$.name')",
-            },
-        )
-        self.validate_all(
-            "STRUCT(a = b, c = d)",
-            read={
-                "snowflake": "OBJECT_CONSTRUCT(a, b, c, d)",
             },
         )
         self.validate_all(

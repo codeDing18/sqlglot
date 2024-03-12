@@ -120,6 +120,8 @@ def _pop_table_column_aliases(derived_tables: t.List[exp.CTE | exp.Subquery]) ->
     For example, `col1` and `col2` will be dropped in SELECT ... FROM (SELECT ...) AS foo(col1, col2)
     """
     for derived_table in derived_tables:
+        if isinstance(derived_table.parent, exp.With) and derived_table.parent.recursive:
+            continue
         table_alias = derived_table.args.get("alias")
         if table_alias:
             table_alias.args.pop("columns", None)
@@ -214,7 +216,13 @@ def _expand_alias_refs(scope: Scope, resolver: Resolver) -> None:
             table = resolver.get_table(column.name) if resolve_table and not column.table else None
             alias_expr, i = alias_to_expression.get(column.name, (None, 1))
             double_agg = (
-                (alias_expr.find(exp.AggFunc) and column.find_ancestor(exp.AggFunc))
+                (
+                    alias_expr.find(exp.AggFunc)
+                    and (
+                        column.find_ancestor(exp.AggFunc)
+                        and not isinstance(column.find_ancestor(exp.Window, exp.Select), exp.Window)
+                    )
+                )
                 if alias_expr
                 else False
             )
@@ -404,7 +412,7 @@ def _expand_stars(
             tables = list(scope.selected_sources)
             _add_except_columns(expression, tables, except_columns)
             _add_replace_columns(expression, tables, replace_columns)
-        elif expression.is_star:
+        elif expression.is_star and not isinstance(expression, exp.Dot):
             tables = [expression.table]
             _add_except_columns(expression.this, tables, except_columns)
             _add_replace_columns(expression.this, tables, replace_columns)
@@ -417,7 +425,7 @@ def _expand_stars(
                 raise OptimizeError(f"Unknown table: {table}")
 
             columns = resolver.get_source_columns(table, only_visible=True)
-            columns = columns or scope.outer_column_list
+            columns = columns or scope.outer_columns
 
             if pseudocolumns:
                 columns = [name for name in columns if name.upper() not in pseudocolumns]
@@ -437,7 +445,7 @@ def _expand_stars(
 
                 if pivot_columns:
                     new_selections.extend(
-                        exp.alias_(exp.column(name, table=pivot.alias), name, copy=False)
+                        alias(exp.column(name, table=pivot.alias), name, copy=False)
                         for name in pivot_columns
                         if name not in columns_to_exclude
                     )
@@ -466,7 +474,7 @@ def _expand_stars(
                     )
 
     # Ensures we don't overwrite the initial selections with an empty list
-    if new_selections:
+    if new_selections and isinstance(scope.expression, exp.Select):
         scope.expression.set("expressions", new_selections)
 
 
@@ -509,7 +517,7 @@ def qualify_outputs(scope_or_expression: Scope | exp.Expression) -> None:
 
     new_selections = []
     for i, (selection, aliased_column) in enumerate(
-        itertools.zip_longest(scope.expression.selects, scope.outer_column_list)
+        itertools.zip_longest(scope.expression.selects, scope.outer_columns)
     ):
         if selection is None:
             break
@@ -528,7 +536,8 @@ def qualify_outputs(scope_or_expression: Scope | exp.Expression) -> None:
 
         new_selections.append(selection)
 
-    scope.expression.set("expressions", new_selections)
+    if isinstance(scope.expression, exp.Select):
+        scope.expression.set("expressions", new_selections)
 
 
 def quote_identifiers(expression: E, dialect: DialectType = None, identify: bool = True) -> E:
@@ -615,7 +624,7 @@ class Resolver:
 
         node, _ = self.scope.selected_sources.get(table_name)
 
-        if isinstance(node, exp.Subqueryable):
+        if isinstance(node, exp.Query):
             while node and node.alias != table_name:
                 node = node.parent
 

@@ -21,7 +21,7 @@ from sqlglot.dialects.dialect import (
     var_map_sql,
 )
 from sqlglot.expressions import Literal
-from sqlglot.helper import is_int, seq_get
+from sqlglot.helper import flatten, is_int, seq_get
 from sqlglot.tokens import TokenType
 
 if t.TYPE_CHECKING:
@@ -66,7 +66,7 @@ def _build_object_construct(args: t.List) -> t.Union[exp.StarMap, exp.Struct]:
 
     return exp.Struct(
         expressions=[
-            t.cast(exp.Condition, k).eq(v) for k, v in zip(expression.keys, expression.values)
+            exp.PropertyEQ(this=k, expression=v) for k, v in zip(expression.keys, expression.values)
         ]
     )
 
@@ -327,7 +327,6 @@ class Snowflake(Dialect):
                 end=exp.Sub(this=seq_get(args, 1), expression=exp.Literal.number(1)),
                 step=seq_get(args, 2),
             ),
-            "ARRAY_TO_STRING": exp.ArrayJoin.from_arg_list,
             "BITXOR": binary_from_function(exp.BitwiseXor),
             "BIT_XOR": binary_from_function(exp.BitwiseXor),
             "BOOLXOR": binary_from_function(exp.Xor),
@@ -359,6 +358,12 @@ class Snowflake(Dialect):
             "TIMESTAMPDIFF": _build_datediff,
             "TIMESTAMPFROMPARTS": _build_timestamp_from_parts,
             "TIMESTAMP_FROM_PARTS": _build_timestamp_from_parts,
+            "TO_NUMBER": lambda args: exp.ToNumber(
+                this=seq_get(args, 0),
+                format=seq_get(args, 1),
+                precision=seq_get(args, 2),
+                scale=seq_get(args, 3),
+            ),
             "TO_TIMESTAMP": _build_to_timestamp,
             "TO_VARCHAR": exp.ToChar.from_arg_list,
             "ZEROIFNULL": _build_if_from_zeroifnull,
@@ -377,7 +382,6 @@ class Snowflake(Dialect):
             **parser.Parser.RANGE_PARSERS,
             TokenType.LIKE_ANY: parser.binary_range_parser(exp.LikeAny),
             TokenType.ILIKE_ANY: parser.binary_range_parser(exp.ILikeAny),
-            TokenType.COLON: lambda self, this: self._parse_colon_get_path(this),
         }
 
         ALTER_PARSERS = {
@@ -434,35 +438,35 @@ class Snowflake(Dialect):
 
         SCHEMA_KINDS = {"OBJECTS", "TABLES", "VIEWS", "SEQUENCES", "UNIQUE KEYS", "IMPORTED KEYS"}
 
-        def _parse_colon_get_path(
-            self: parser.Parser, this: t.Optional[exp.Expression]
-        ) -> t.Optional[exp.Expression]:
-            while True:
-                path = self._parse_bitwise()
+        def _parse_column_ops(self, this: t.Optional[exp.Expression]) -> t.Optional[exp.Expression]:
+            this = super()._parse_column_ops(this)
+
+            casts = []
+            json_path = []
+
+            while self._match(TokenType.COLON):
+                path = super()._parse_column_ops(self._parse_field(any_token=True))
 
                 # The cast :: operator has a lower precedence than the extraction operator :, so
                 # we rearrange the AST appropriately to avoid casting the 2nd argument of GET_PATH
-                if isinstance(path, exp.Cast):
-                    target_type = path.to
+                while isinstance(path, exp.Cast):
+                    casts.append(path.to)
                     path = path.this
-                else:
-                    target_type = None
 
-                if isinstance(path, exp.Expression):
-                    path = exp.Literal.string(path.sql(dialect="snowflake"))
+                if path:
+                    json_path.append(path.sql(dialect="snowflake", copy=False))
 
-                # The extraction operator : is left-associative
+            if json_path:
                 this = self.expression(
-                    exp.JSONExtract, this=this, expression=self.dialect.to_json_path(path)
+                    exp.JSONExtract,
+                    this=this,
+                    expression=self.dialect.to_json_path(exp.Literal.string(".".join(json_path))),
                 )
 
-                if target_type:
-                    this = exp.cast(this, target_type)
+                while casts:
+                    this = self.expression(exp.Cast, this=this, to=casts.pop())
 
-                if not self._match(TokenType.COLON):
-                    break
-
-            return self._parse_range(this)
+            return this
 
         # https://docs.snowflake.com/en/sql-reference/functions/date_part.html
         # https://docs.snowflake.com/en/sql-reference/functions-date-time.html#label-supported-date-time-parts
@@ -711,7 +715,6 @@ class Snowflake(Dialect):
             exp.Array: inline_array_sql,
             exp.ArrayConcat: rename_func("ARRAY_CAT"),
             exp.ArrayContains: lambda self, e: self.func("ARRAY_CONTAINS", e.expression, e.this),
-            exp.ArrayJoin: rename_func("ARRAY_TO_STRING"),
             exp.AtTimeZone: lambda self, e: self.func(
                 "CONVERT_TIMEZONE", e.args.get("zone"), e.this
             ),
@@ -768,10 +771,6 @@ class Snowflake(Dialect):
                 "POSITION", e.args.get("substr"), e.this, e.args.get("position")
             ),
             exp.StrToTime: lambda self, e: self.func("TO_TIMESTAMP", e.this, self.format_time(e)),
-            exp.Struct: lambda self, e: self.func(
-                "OBJECT_CONSTRUCT",
-                *(arg for expression in e.expressions for arg in expression.flatten()),
-            ),
             exp.Stuff: rename_func("INSERT"),
             exp.TimestampDiff: lambda self, e: self.func(
                 "TIMESTAMPDIFF", e.unit, e.expression, e.this
@@ -814,6 +813,15 @@ class Snowflake(Dialect):
             exp.SetProperty: exp.Properties.Location.UNSUPPORTED,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
+
+        def tonumber_sql(self, expression: exp.ToNumber) -> str:
+            return self.func(
+                "TO_NUMBER",
+                expression.this,
+                expression.args.get("format"),
+                expression.args.get("precision"),
+                expression.args.get("scale"),
+            )
 
         def timestampfromparts_sql(self, expression: exp.TimestampFromParts) -> str:
             milli = expression.args.get("milli")
@@ -947,3 +955,19 @@ class Snowflake(Dialect):
 
         def cluster_sql(self, expression: exp.Cluster) -> str:
             return f"CLUSTER BY ({self.expressions(expression, flat=True)})"
+
+        def struct_sql(self, expression: exp.Struct) -> str:
+            keys = []
+            values = []
+
+            for i, e in enumerate(expression.expressions):
+                if isinstance(e, exp.PropertyEQ):
+                    keys.append(
+                        exp.Literal.string(e.name) if isinstance(e.this, exp.Identifier) else e.this
+                    )
+                    values.append(e.expression)
+                else:
+                    keys.append(exp.Literal.string(f"_{i}"))
+                    values.append(e)
+
+            return self.func("OBJECT_CONSTRUCT", *flatten(zip(keys, values)))

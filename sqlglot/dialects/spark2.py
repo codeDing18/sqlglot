@@ -203,6 +203,7 @@ class Spark2(Hive):
             exp.ApproxDistinct: rename_func("APPROX_COUNT_DISTINCT"),
             exp.ArraySum: lambda self,
             e: f"AGGREGATE({self.sql(e, 'this')}, 0, (acc, x) -> acc + x, acc -> acc)",
+            exp.ArrayToString: rename_func("ARRAY_JOIN"),
             exp.AtTimeZone: lambda self, e: self.func(
                 "FROM_UTC_TIMESTAMP", e.this, e.args.get("zone")
             ),
@@ -252,7 +253,6 @@ class Spark2(Hive):
                 [transforms.remove_within_group_for_percentiles]
             ),
         }
-        TRANSFORMS.pop(exp.ArrayJoin)
         TRANSFORMS.pop(exp.ArraySort)
         TRANSFORMS.pop(exp.ILike)
         TRANSFORMS.pop(exp.Left)
@@ -263,14 +263,9 @@ class Spark2(Hive):
         CREATE_FUNCTION_RETURN_AS = False
 
         def struct_sql(self, expression: exp.Struct) -> str:
-            args = []
-            for arg in expression.expressions:
-                if isinstance(arg, self.KEY_VALUE_DEFINITIONS):
-                    args.append(exp.alias_(arg.expression, arg.this.name))
-                else:
-                    args.append(arg)
+            from sqlglot.generator import Generator
 
-            return self.func("STRUCT", *args)
+            return Generator.struct_sql(self, expression)
 
         def cast_sql(self, expression: exp.Cast, safe_prefix: t.Optional[str] = None) -> str:
             if is_parse_json(expression.this):

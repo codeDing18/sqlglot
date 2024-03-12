@@ -172,6 +172,10 @@ SELECT _q_0._col_0 AS _col_0, _q_0._col_1 AS _col_1 FROM (VALUES (1, 2)) AS _q_0
 select * from (values (1, 2)) x;
 SELECT x._col_0 AS _col_0, x._col_1 AS _col_1 FROM (VALUES (1, 2)) AS x(_col_0, _col_1);
 
+# execute: false
+SELECT SOME_UDF(data).* FROM t;
+SELECT SOME_UDF(t.data).* FROM t AS t;
+
 --------------------------------------
 -- Derived tables
 --------------------------------------
@@ -332,6 +336,10 @@ WITH cte AS (SELECT 1 AS x) SELECT cte.a AS a FROM cte AS cte(a);
 
 WITH cte(x, y) AS (SELECT 1, 2) SELECT cte.* FROM cte AS cte(a);
 WITH cte AS (SELECT 1 AS x, 2 AS y) SELECT cte.a AS a, cte.y AS y FROM cte AS cte(a);
+
+-- Cannot pop table column aliases for recursive ctes (redshift).
+WITH RECURSIVE cte(x) AS (SELECT 1), cte2(y) AS (SELECT 2) SELECT * FROM cte, cte2;
+WITH RECURSIVE cte(x) AS (SELECT 1 AS x), cte2(y) AS (SELECT 2 AS y) SELECT cte.x AS x, cte2.y AS y FROM cte AS cte, cte2 AS cte2;
 
 # execute: false
 WITH player AS (SELECT player.name, player.asset.info FROM players) SELECT * FROM player;
@@ -549,6 +557,10 @@ SELECT x.a + x.b AS f, (x.a + x.b) * x.b AS _col_1 FROM x AS x;
 SELECT x.a + x.b AS f, f, f + 5 FROM x;
 SELECT x.a + x.b AS f, x.a + x.b AS _col_1, x.a + x.b + 5 AS _col_2 FROM x AS x;
 
+# title: expand double agg if window func
+SELECT a, SUM(b) AS c, SUM(c) OVER(PARTITION BY a) AS d from x group by 1 ORDER BY a;
+SELECT x.a AS a, SUM(x.b) AS c, SUM(SUM(x.b)) OVER (PARTITION BY x.a) AS d FROM x AS x GROUP BY x.a ORDER BY a;
+
 --------------------------------------
 -- Wrapped tables / join constructs
 --------------------------------------
@@ -568,8 +580,8 @@ SELECT * FROM ((SELECT * FROM tbl));
 SELECT * FROM ((SELECT * FROM tbl AS tbl) AS _q_0);
 
 # execute: false
-SELECT * FROM ((SELECT c FROM t1) JOIN t2);
-SELECT * FROM ((SELECT t1.c AS c FROM t1 AS t1) AS _q_0, t2 AS t2);
+SELECT * FROM ((SELECT c FROM t1) CROSS JOIN t2);
+SELECT * FROM ((SELECT t1.c AS c FROM t1 AS t1) AS _q_0 CROSS JOIN t2 AS t2);
 
 # execute: false
 SELECT * FROM ((SELECT * FROM x) INNER JOIN y ON a = c);

@@ -138,7 +138,9 @@ def _auto_increment_to_serial(expression: exp.Expression) -> exp.Expression:
 
 
 def _serial_to_generated(expression: exp.Expression) -> exp.Expression:
-    kind = expression.args.get("kind")
+    if not isinstance(expression, exp.ColumnDef):
+        return expression
+    kind = expression.kind
     if not kind:
         return expression
 
@@ -279,6 +281,7 @@ class Postgres(Dialect):
             "TEMP": TokenType.TEMPORARY,
             "CSTRING": TokenType.PSEUDO_TYPE,
             "OID": TokenType.OBJECT_IDENTIFIER,
+            "ONLY": TokenType.ONLY,
             "OPERATOR": TokenType.OPERATOR,
             "REGCLASS": TokenType.OBJECT_IDENTIFIER,
             "REGCOLLATION": TokenType.OBJECT_IDENTIFIER,
@@ -451,6 +454,7 @@ class Postgres(Dialect):
             exp.JSONBExtract: lambda self, e: self.binary(e, "#>"),
             exp.JSONBExtractScalar: lambda self, e: self.binary(e, "#>>"),
             exp.JSONBContains: lambda self, e: self.binary(e, "?"),
+            exp.ParseJSON: lambda self, e: self.sql(exp.cast(e.this, exp.DataType.Type.JSON)),
             exp.JSONPathKey: json_path_key_only_name,
             exp.JSONPathRoot: lambda *_: "",
             exp.JSONPathSubscript: lambda self, e: self.json_path_part(e.this),
@@ -480,6 +484,7 @@ class Postgres(Dialect):
                 ]
             ),
             exp.StrPosition: str_position_sql,
+            exp.StrToDate: lambda self, e: self.func("TO_DATE", e.this, self.format_time(e)),
             exp.StrToTime: lambda self, e: self.func("TO_TIMESTAMP", e.this, self.format_time(e)),
             exp.StructExtract: struct_extract_sql,
             exp.Substring: _substring_sql,
@@ -505,6 +510,26 @@ class Postgres(Dialect):
             exp.TransientProperty: exp.Properties.Location.UNSUPPORTED,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
+
+        def unnest_sql(self, expression: exp.Unnest) -> str:
+            if len(expression.expressions) == 1:
+                from sqlglot.optimizer.annotate_types import annotate_types
+
+                this = annotate_types(expression.expressions[0])
+                if this.is_type("array<json>"):
+                    while isinstance(this, exp.Cast):
+                        this = this.this
+
+                    arg = self.sql(exp.cast(this, exp.DataType.Type.JSON))
+                    alias = self.sql(expression, "alias")
+                    alias = f" AS {alias}" if alias else ""
+
+                    if expression.args.get("offset"):
+                        self.unsupported("Unsupported JSON_ARRAY_ELEMENTS with offset")
+
+                    return f"JSON_ARRAY_ELEMENTS({arg}){alias}"
+
+            return super().unnest_sql(expression)
 
         def bracket_sql(self, expression: exp.Bracket) -> str:
             """Forms like ARRAY[1, 2, 3][3] aren't allowed; we need to wrap the ARRAY."""

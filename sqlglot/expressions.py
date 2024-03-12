@@ -248,17 +248,38 @@ class Expression(metaclass=_Expression):
         return self._meta
 
     def __deepcopy__(self, memo):
-        copy = self.__class__(**deepcopy(self.args))
-        if self.comments is not None:
-            copy.comments = deepcopy(self.comments)
+        root = self.__class__()
+        stack = [(self, root)]
 
-        if self._type is not None:
-            copy._type = self._type.copy()
+        while stack:
+            node, copy = stack.pop()
 
-        if self._meta is not None:
-            copy._meta = deepcopy(self._meta)
+            if node.comments is not None:
+                copy.comments = deepcopy(node.comments)
+            if node._type is not None:
+                copy._type = deepcopy(node._type)
+            if node._meta is not None:
+                copy._meta = deepcopy(node._meta)
+            if node._hash is not None:
+                copy._hash = node._hash
 
-        return copy
+            for k, vs in node.args.items():
+                if hasattr(vs, "parent"):
+                    stack.append((vs, vs.__class__()))
+                    copy.set(k, stack[-1][-1])
+                elif type(vs) is list:
+                    copy.args[k] = []
+
+                    for v in vs:
+                        if hasattr(v, "parent"):
+                            stack.append((v, v.__class__()))
+                            copy.append(k, stack[-1][-1])
+                        else:
+                            copy.append(k, v)
+                else:
+                    copy.args[k] = vs
+
+        return root
 
     def copy(self):
         """
@@ -289,7 +310,7 @@ class Expression(metaclass=_Expression):
             arg_key (str): name of the list expression arg
             value (Any): value to append to the list
         """
-        if not isinstance(self.args.get(arg_key), list):
+        if type(self.args.get(arg_key)) is not list:
             self.args[arg_key] = []
         self.args[arg_key].append(value)
         self._set_parent(arg_key, value)
@@ -328,11 +349,12 @@ class Expression(metaclass=_Expression):
             return self.parent.depth + 1
         return 0
 
-    def iter_expressions(self) -> t.Iterator[t.Tuple[str, Expression]]:
+    def iter_expressions(self, reverse: bool = False) -> t.Iterator[t.Tuple[str, Expression]]:
         """Yields the key and expression for all arguments, exploding list args."""
-        for k, vs in self.args.items():
+        # need to materialize tuple due to python 3.7
+        for k, vs in reversed(tuple(self.args.items())) if reverse else self.args.items():
             if type(vs) is list:
-                for v in vs:
+                for v in reversed(vs) if reverse else vs:
                     if hasattr(v, "parent"):
                         yield k, v
             else:
@@ -431,13 +453,18 @@ class Expression(metaclass=_Expression):
         Returns:
             The generator object.
         """
-        parent = parent or self.parent
-        yield self, parent, key
-        if prune and prune(self, parent, key):
-            return
+        stack = [(self, parent or self.parent, key)]
 
-        for k, v in self.iter_expressions():
-            yield from v.dfs(self, k, prune)
+        while stack:
+            node, parent, key = stack.pop()
+
+            yield node, parent, key
+
+            if prune and prune(node, parent, key):
+                continue
+
+            for k, v in node.iter_expressions(reverse=True):
+                stack.append((v, node, k))
 
     def bfs(self, prune=None):
         """
@@ -548,12 +575,10 @@ class Expression(metaclass=_Expression):
         return new_node
 
     @t.overload
-    def replace(self, expression: E) -> E:
-        ...
+    def replace(self, expression: E) -> E: ...
 
     @t.overload
-    def replace(self, expression: None) -> None:
-        ...
+    def replace(self, expression: None) -> None: ...
 
     def replace(self, expression):
         """
@@ -913,14 +938,142 @@ class Predicate(Condition):
 class DerivedTable(Expression):
     @property
     def selects(self) -> t.List[Expression]:
-        return self.this.selects if isinstance(self.this, Subqueryable) else []
+        return self.this.selects if isinstance(self.this, Query) else []
 
     @property
     def named_selects(self) -> t.List[str]:
         return [select.output_name for select in self.selects]
 
 
-class Unionable(Expression):
+class Query(Expression):
+    def subquery(self, alias: t.Optional[ExpOrStr] = None, copy: bool = True) -> Subquery:
+        """
+        Returns a `Subquery` that wraps around this query.
+
+        Example:
+            >>> subquery = Select().select("x").from_("tbl").subquery()
+            >>> Select().select("x").from_(subquery).sql()
+            'SELECT x FROM (SELECT x FROM tbl)'
+
+        Args:
+            alias: an optional alias for the subquery.
+            copy: if `False`, modify this expression instance in-place.
+        """
+        instance = maybe_copy(self, copy)
+        if not isinstance(alias, Expression):
+            alias = TableAlias(this=to_identifier(alias)) if alias else None
+
+        return Subquery(this=instance, alias=alias)
+
+    def limit(
+        self, expression: ExpOrStr | int, dialect: DialectType = None, copy: bool = True, **opts
+    ) -> Select:
+        """
+        Adds a LIMIT clause to this query.
+
+        Example:
+            >>> select("1").union(select("1")).limit(1).sql()
+            'SELECT * FROM (SELECT 1 UNION SELECT 1) AS _l_0 LIMIT 1'
+
+        Args:
+            expression: the SQL code string to parse.
+                This can also be an integer.
+                If a `Limit` instance is passed, it will be used as-is.
+                If another `Expression` instance is passed, it will be wrapped in a `Limit`.
+            dialect: the dialect used to parse the input expression.
+            copy: if `False`, modify this expression instance in-place.
+            opts: other options to use to parse the input expressions.
+
+        Returns:
+            A limited Select expression.
+        """
+        return (
+            select("*")
+            .from_(self.subquery(alias="_l_0", copy=copy))
+            .limit(expression, dialect=dialect, copy=False, **opts)
+        )
+
+    @property
+    def ctes(self) -> t.List[CTE]:
+        """Returns a list of all the CTEs attached to this query."""
+        with_ = self.args.get("with")
+        return with_.expressions if with_ else []
+
+    @property
+    def selects(self) -> t.List[Expression]:
+        """Returns the query's projections."""
+        raise NotImplementedError("Query objects must implement `selects`")
+
+    @property
+    def named_selects(self) -> t.List[str]:
+        """Returns the output names of the query's projections."""
+        raise NotImplementedError("Query objects must implement `named_selects`")
+
+    def select(
+        self,
+        *expressions: t.Optional[ExpOrStr],
+        append: bool = True,
+        dialect: DialectType = None,
+        copy: bool = True,
+        **opts,
+    ) -> Query:
+        """
+        Append to or set the SELECT expressions.
+
+        Example:
+            >>> Select().select("x", "y").sql()
+            'SELECT x, y'
+
+        Args:
+            *expressions: the SQL code strings to parse.
+                If an `Expression` instance is passed, it will be used as-is.
+            append: if `True`, add to any existing expressions.
+                Otherwise, this resets the expressions.
+            dialect: the dialect used to parse the input expressions.
+            copy: if `False`, modify this expression instance in-place.
+            opts: other options to use to parse the input expressions.
+
+        Returns:
+            The modified Query expression.
+        """
+        raise NotImplementedError("Query objects must implement `select`")
+
+    def with_(
+        self,
+        alias: ExpOrStr,
+        as_: ExpOrStr,
+        recursive: t.Optional[bool] = None,
+        append: bool = True,
+        dialect: DialectType = None,
+        copy: bool = True,
+        **opts,
+    ) -> Query:
+        """
+        Append to or set the common table expressions.
+
+        Example:
+            >>> Select().with_("tbl2", as_="SELECT * FROM tbl").select("x").from_("tbl2").sql()
+            'WITH tbl2 AS (SELECT * FROM tbl) SELECT x FROM tbl2'
+
+        Args:
+            alias: the SQL code string to parse as the table name.
+                If an `Expression` instance is passed, this is used as-is.
+            as_: the SQL code string to parse as the table expression.
+                If an `Expression` instance is passed, it will be used as-is.
+            recursive: set the RECURSIVE part of the expression. Defaults to `False`.
+            append: if `True`, add to any existing expressions.
+                Otherwise, this resets the expressions.
+            dialect: the dialect used to parse the input expression.
+            copy: if `False`, modify this expression instance in-place.
+            opts: other options to use to parse the input expressions.
+
+        Returns:
+            The modified expression.
+        """
+        return _apply_cte_builder(
+            self, alias, as_, recursive=recursive, append=append, dialect=dialect, copy=copy, **opts
+        )
+
     def union(
         self, expression: ExpOrStr, distinct: bool = True, dialect: DialectType = None, **opts
     ) -> Union:
@@ -946,7 +1099,7 @@ class Unionable(Expression):
 
     def intersect(
         self, expression: ExpOrStr, distinct: bool = True, dialect: DialectType = None, **opts
-    ) -> Unionable:
+    ) -> Intersect:
         """
         Builds an INTERSECT expression.
 
@@ -969,7 +1122,7 @@ class Unionable(Expression):
 
     def except_(
         self, expression: ExpOrStr, distinct: bool = True, dialect: DialectType = None, **opts
-    ) -> Unionable:
+    ) -> Except:
         """
         Builds an EXCEPT expression.
 
@@ -991,7 +1144,7 @@ class Unionable(Expression):
         return except_(left=self, right=expression, distinct=distinct, dialect=dialect, **opts)
 
 
-class UDTF(DerivedTable, Unionable):
+class UDTF(DerivedTable):
     @property
     def selects(self) -> t.List[Expression]:
         alias = self.args.get("alias")
@@ -1017,23 +1170,23 @@ class Refresh(Expression):
 
 class DDL(Expression):
     @property
-    def ctes(self):
+    def ctes(self) -> t.List[CTE]:
+        """Returns a list of all the CTEs attached to this statement."""
         with_ = self.args.get("with")
-        if not with_:
-            return []
-        return with_.expressions
-
-    @property
-    def named_selects(self) -> t.List[str]:
-        if isinstance(self.expression, Subqueryable):
-            return self.expression.named_selects
-        return []
+        return with_.expressions if with_ else []
 
     @property
     def selects(self) -> t.List[Expression]:
-        if isinstance(self.expression, Subqueryable):
-            return self.expression.selects
-        return []
+        """If this statement contains a query (e.g. a CTAS), this returns the query's projections."""
+        return self.expression.selects if isinstance(self.expression, Query) else []
+
+    @property
+    def named_selects(self) -> t.List[str]:
+        """
+        If this statement contains a query (e.g. a CTAS), this returns the output
+        names of the query's projections.
+        """
+        return self.expression.named_selects if isinstance(self.expression, Query) else []
 
 
 class DML(Expression):
@@ -1094,6 +1247,31 @@ class Create(DDL):
     def kind(self) -> t.Optional[str]:
         kind = self.args.get("kind")
         return kind and kind.upper()
+
+
+class SequenceProperties(Expression):
+    arg_types = {
+        "increment": False,
+        "minvalue": False,
+        "maxvalue": False,
+        "cache": False,
+        "start": False,
+        "owned": False,
+        "options": False,
+    }
+
+
+class TruncateTable(Expression):
+    arg_types = {
+        "expressions": True,
+        "is_database": False,
+        "exists": False,
+        "only": False,
+        "cluster": False,
+        "identity": False,
+        "option": False,
+        "partition": False,
+    }
 
 
 # https://docs.snowflake.com/en/sql-reference/sql/create-clone
@@ -1271,6 +1449,10 @@ class ColumnDef(Expression):
     def constraints(self) -> t.List[ColumnConstraint]:
         return self.args.get("constraints") or []
 
+    @property
+    def kind(self) -> t.Optional[DataType]:
+        return self.args.get("kind")
+
 
 class AlterColumn(Expression):
     arg_types = {
@@ -1398,6 +1580,15 @@ class EncodeColumnConstraint(ColumnConstraintKind):
     pass
 
 
+# https://www.postgresql.org/docs/current/sql-createtable.html#SQL-CREATETABLE-EXCLUDE
+class ExcludeColumnConstraint(ColumnConstraintKind):
+    pass
+
+
+class WithOperator(Expression):
+    arg_types = {"this": True, "op": True}
+
+
 class GeneratedAsIdentityColumnConstraint(ColumnConstraintKind):
     # this: True -> ALWAYS, this: False -> BY DEFAULT
     arg_types = {
@@ -1462,7 +1653,7 @@ class TitleColumnConstraint(ColumnConstraintKind):
 
 
 class UniqueColumnConstraint(ColumnConstraintKind):
-    arg_types = {"this": False, "index_type": False}
+    arg_types = {"this": False, "index_type": False, "on_conflict": False}
 
 
 class UppercaseColumnConstraint(ColumnConstraintKind):
@@ -1672,19 +1863,28 @@ class Index(Expression):
     arg_types = {
         "this": False,
         "table": False,
-        "using": False,
-        "where": False,
-        "columns": False,
         "unique": False,
         "primary": False,
         "amp": False,  # teradata
+        "params": False,
+    }
+
+
+class IndexParameters(Expression):
+    arg_types = {
+        "using": False,
         "include": False,
-        "partition_by": False,  # teradata
+        "columns": False,
+        "with_storage": False,
+        "partition_by": False,
+        "tablespace": False,
+        "where": False,
     }
 
 
 class Insert(DDL, DML):
     arg_types = {
+        "hint": False,
         "with": False,
         "this": True,
         "expression": False,
@@ -1740,8 +1940,8 @@ class OnConflict(Expression):
     arg_types = {
         "duplicate": False,
         "expressions": False,
-        "nothing": False,
-        "key": False,
+        "action": False,
+        "conflict_keys": False,
         "constraint": False,
     }
 
@@ -1774,6 +1974,10 @@ class LoadData(Expression):
 
 class Partition(Expression):
     arg_types = {"expressions": True}
+
+
+class PartitionRange(Expression):
+    arg_types = {"this": True, "expression": True}
 
 
 class Fetch(Expression):
@@ -2106,6 +2310,10 @@ class FreespaceProperty(Property):
     arg_types = {"this": True, "percent": False}
 
 
+class GlobalProperty(Property):
+    arg_types = {}
+
+
 class InheritsProperty(Property):
     arg_types = {"expressions": True}
 
@@ -2170,6 +2378,10 @@ class LikeProperty(Property):
 
 
 class LocationProperty(Property):
+    arg_types = {"this": True}
+
+
+class LockProperty(Property):
     arg_types = {"this": True}
 
 
@@ -2285,6 +2497,10 @@ class SetProperty(Property):
     arg_types = {"multi": True}
 
 
+class SharingProperty(Property):
+    arg_types = {"this": False}
+
+
 class SetConfigProperty(Property):
     arg_types = {"this": True}
 
@@ -2310,7 +2526,7 @@ class StabilityProperty(Property):
 
 
 class TemporaryProperty(Property):
-    arg_types = {}
+    arg_types = {"this": False}
 
 
 class TransformModelProperty(Property):
@@ -2319,6 +2535,10 @@ class TransformModelProperty(Property):
 
 class TransientProperty(Property):
     arg_types = {"this": False}
+
+
+class UnloggedProperty(Property):
+    arg_types = {}
 
 
 class VolatileProperty(Property):
@@ -2356,6 +2576,7 @@ class Properties(Expression):
         "FORMAT": FileFormatProperty,
         "LANGUAGE": LanguageProperty,
         "LOCATION": LocationProperty,
+        "LOCK": LockProperty,
         "PARTITIONED_BY": PartitionedByProperty,
         "RETURNS": ReturnsProperty,
         "ROW_FORMAT": RowFormatProperty,
@@ -2445,102 +2666,13 @@ class Tuple(Expression):
         )
 
 
-class Subqueryable(Unionable):
-    def subquery(self, alias: t.Optional[ExpOrStr] = None, copy: bool = True) -> Subquery:
-        """
-        Convert this expression to an aliased expression that can be used as a Subquery.
-
-        Example:
-            >>> subquery = Select().select("x").from_("tbl").subquery()
-            >>> Select().select("x").from_(subquery).sql()
-            'SELECT x FROM (SELECT x FROM tbl)'
-
-        Args:
-            alias (str | Identifier): an optional alias for the subquery
-            copy (bool): if `False`, modify this expression instance in-place.
-
-        Returns:
-            Alias: the subquery
-        """
-        instance = maybe_copy(self, copy)
-        if not isinstance(alias, Expression):
-            alias = TableAlias(this=to_identifier(alias)) if alias else None
-
-        return Subquery(this=instance, alias=alias)
-
-    def limit(
-        self, expression: ExpOrStr | int, dialect: DialectType = None, copy: bool = True, **opts
-    ) -> Select:
-        raise NotImplementedError
-
-    @property
-    def ctes(self):
-        with_ = self.args.get("with")
-        if not with_:
-            return []
-        return with_.expressions
-
-    @property
-    def selects(self) -> t.List[Expression]:
-        raise NotImplementedError("Subqueryable objects must implement `selects`")
-
-    @property
-    def named_selects(self) -> t.List[str]:
-        raise NotImplementedError("Subqueryable objects must implement `named_selects`")
-
-    def select(
-        self,
-        *expressions: t.Optional[ExpOrStr],
-        append: bool = True,
-        dialect: DialectType = None,
-        copy: bool = True,
-        **opts,
-    ) -> Subqueryable:
-        raise NotImplementedError("Subqueryable objects must implement `select`")
-
-    def with_(
-        self,
-        alias: ExpOrStr,
-        as_: ExpOrStr,
-        recursive: t.Optional[bool] = None,
-        append: bool = True,
-        dialect: DialectType = None,
-        copy: bool = True,
-        **opts,
-    ) -> Subqueryable:
-        """
-        Append to or set the common table expressions.
-
-        Example:
-            >>> Select().with_("tbl2", as_="SELECT * FROM tbl").select("x").from_("tbl2").sql()
-            'WITH tbl2 AS (SELECT * FROM tbl) SELECT x FROM tbl2'
-
-        Args:
-            alias: the SQL code string to parse as the table name.
-                If an `Expression` instance is passed, this is used as-is.
-            as_: the SQL code string to parse as the table expression.
-                If an `Expression` instance is passed, it will be used as-is.
-            recursive: set the RECURSIVE part of the expression. Defaults to `False`.
-            append: if `True`, add to any existing expressions.
-                Otherwise, this resets the expressions.
-            dialect: the dialect used to parse the input expression.
-            copy: if `False`, modify this expression instance in-place.
-            opts: other options to use to parse the input expressions.
-
-        Returns:
-            The modified expression.
-        """
-        return _apply_cte_builder(
-            self, alias, as_, recursive=recursive, append=append, dialect=dialect, copy=copy, **opts
-        )
-
-
 QUERY_MODIFIERS = {
     "match": False,
     "laterals": False,
     "joins": False,
     "connect": False,
     "pivots": False,
+    "prewhere": False,
     "where": False,
     "group": False,
     "having": False,
@@ -2556,7 +2688,14 @@ QUERY_MODIFIERS = {
     "sample": False,
     "settings": False,
     "format": False,
+    "options": False,
 }
+
+
+# https://learn.microsoft.com/en-us/sql/t-sql/queries/option-clause-transact-sql?view=sql-server-ver16
+# https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-query?view=sql-server-ver16
+class QueryOption(Expression):
+    arg_types = {"this": True, "expression": False}
 
 
 # https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table?view=sql-server-ver16
@@ -2590,6 +2729,7 @@ class Table(Expression):
         "pattern": False,
         "ordinality": False,
         "when": False,
+        "only": False,
     }
 
     @property
@@ -2638,7 +2778,7 @@ class Table(Expression):
         return col
 
 
-class Union(Subqueryable):
+class Union(Query):
     arg_types = {
         "with": False,
         "this": True,
@@ -2648,34 +2788,6 @@ class Union(Subqueryable):
         **QUERY_MODIFIERS,
     }
 
-    def limit(
-        self, expression: ExpOrStr | int, dialect: DialectType = None, copy: bool = True, **opts
-    ) -> Select:
-        """
-        Set the LIMIT expression.
-
-        Example:
-            >>> select("1").union(select("1")).limit(1).sql()
-            'SELECT * FROM (SELECT 1 UNION SELECT 1) AS _l_0 LIMIT 1'
-
-        Args:
-            expression: the SQL code string to parse.
-                This can also be an integer.
-                If a `Limit` instance is passed, this is used as-is.
-                If another `Expression` instance is passed, it will be wrapped in a `Limit`.
-            dialect: the dialect used to parse the input expression.
-            copy: if `False`, modify this expression instance in-place.
-            opts: other options to use to parse the input expressions.
-
-        Returns:
-            The limited subqueryable.
-        """
-        return (
-            select("*")
-            .from_(self.subquery(alias="_l_0", copy=copy))
-            .limit(expression, dialect=dialect, copy=False, **opts)
-        )
-
     def select(
         self,
         *expressions: t.Optional[ExpOrStr],
@@ -2684,26 +2796,7 @@ class Union(Subqueryable):
         copy: bool = True,
         **opts,
     ) -> Union:
-        """Append to or set the SELECT of the union recursively.
-
-        Example:
-            >>> from sqlglot import parse_one
-            >>> parse_one("select a from x union select a from y union select a from z").select("b").sql()
-            'SELECT a, b FROM x UNION SELECT a, b FROM y UNION SELECT a, b FROM z'
-
-        Args:
-            *expressions: the SQL code strings to parse.
-                If an `Expression` instance is passed, it will be used as-is.
-            append: if `True`, add to any existing expressions.
-                Otherwise, this resets the expressions.
-            dialect: the dialect used to parse the input expressions.
-            copy: if `False`, modify this expression instance in-place.
-            opts: other options to use to parse the input expressions.
-
-        Returns:
-            Union: the modified expression.
-        """
-        this = self.copy() if copy else self
+        this = maybe_copy(self, copy)
         this.this.unnest().select(*expressions, append=append, dialect=dialect, copy=False, **opts)
         this.expression.unnest().select(
             *expressions, append=append, dialect=dialect, copy=False, **opts
@@ -2800,7 +2893,7 @@ class Lock(Expression):
     arg_types = {"update": True, "expressions": False, "wait": False}
 
 
-class Select(Subqueryable):
+class Select(Query):
     arg_types = {
         "with": False,
         "kind": False,
@@ -3011,25 +3104,6 @@ class Select(Subqueryable):
     def limit(
         self, expression: ExpOrStr | int, dialect: DialectType = None, copy: bool = True, **opts
     ) -> Select:
-        """
-        Set the LIMIT expression.
-
-        Example:
-            >>> Select().from_("tbl").select("x").limit(10).sql()
-            'SELECT x FROM tbl LIMIT 10'
-
-        Args:
-            expression: the SQL code string to parse.
-                This can also be an integer.
-                If a `Limit` instance is passed, this is used as-is.
-                If another `Expression` instance is passed, it will be wrapped in a `Limit`.
-            dialect: the dialect used to parse the input expression.
-            copy: if `False`, modify this expression instance in-place.
-            opts: other options to use to parse the input expressions.
-
-        Returns:
-            Select: the modified expression.
-        """
         return _apply_builder(
             expression=expression,
             instance=self,
@@ -3084,31 +3158,13 @@ class Select(Subqueryable):
         copy: bool = True,
         **opts,
     ) -> Select:
-        """
-        Append to or set the SELECT expressions.
-
-        Example:
-            >>> Select().select("x", "y").sql()
-            'SELECT x, y'
-
-        Args:
-            *expressions: the SQL code strings to parse.
-                If an `Expression` instance is passed, it will be used as-is.
-            append: if `True`, add to any existing expressions.
-                Otherwise, this resets the expressions.
-            dialect: the dialect used to parse the input expressions.
-            copy: if `False`, modify this expression instance in-place.
-            opts: other options to use to parse the input expressions.
-
-        Returns:
-            The modified Select expression.
-        """
         return _apply_list_builder(
             *expressions,
             instance=self,
             arg="expressions",
             append=append,
             dialect=dialect,
+            into=Expression,
             copy=copy,
             **opts,
         )
@@ -3416,12 +3472,8 @@ class Select(Subqueryable):
             The new Create expression.
         """
         instance = maybe_copy(self, copy)
-        table_expression = maybe_parse(
-            table,
-            into=Table,
-            dialect=dialect,
-            **opts,
-        )
+        table_expression = maybe_parse(table, into=Table, dialect=dialect, **opts)
+
         properties_expression = None
         if properties:
             properties_expression = Properties.from_dict(properties)
@@ -3493,7 +3545,10 @@ class Select(Subqueryable):
         return self.expressions
 
 
-class Subquery(DerivedTable, Unionable):
+UNWRAPPED_QUERIES = (Select, Union)
+
+
+class Subquery(DerivedTable, Query):
     arg_types = {
         "this": True,
         "alias": False,
@@ -3502,9 +3557,7 @@ class Subquery(DerivedTable, Unionable):
     }
 
     def unnest(self):
-        """
-        Returns the first non subquery.
-        """
+        """Returns the first non subquery."""
         expression = self
         while isinstance(expression, Subquery):
             expression = expression.this
@@ -3515,6 +3568,18 @@ class Subquery(DerivedTable, Unionable):
         while expression.same_parent and expression.is_wrapper:
             expression = t.cast(Subquery, expression.parent)
         return expression
+
+    def select(
+        self,
+        *expressions: t.Optional[ExpOrStr],
+        append: bool = True,
+        dialect: DialectType = None,
+        copy: bool = True,
+        **opts,
+    ) -> Subquery:
+        this = maybe_copy(self, copy)
+        this.unnest().select(*expressions, append=append, dialect=dialect, copy=False, **opts)
+        return this
 
     @property
     def is_wrapper(self) -> bool:
@@ -3603,6 +3668,10 @@ class WindowSpec(Expression):
     }
 
 
+class PreWhere(Expression):
+    pass
+
+
 class Where(Expression):
     pass
 
@@ -3645,6 +3714,10 @@ class Boolean(Condition):
 
 class DataTypeParam(Expression):
     arg_types = {"this": True, "expression": False}
+
+    @property
+    def name(self) -> str:
+        return self.this.name
 
 
 class DataType(Expression):
@@ -3763,44 +3836,61 @@ class DataType(Expression):
     TEXT_TYPES = {
         Type.CHAR,
         Type.NCHAR,
-        Type.VARCHAR,
         Type.NVARCHAR,
         Type.TEXT,
+        Type.VARCHAR,
     }
 
     INTEGER_TYPES = {
-        Type.INT,
-        Type.TINYINT,
-        Type.SMALLINT,
         Type.BIGINT,
+        Type.BIT,
+        Type.INT,
         Type.INT128,
         Type.INT256,
-        Type.BIT,
+        Type.MEDIUMINT,
+        Type.SMALLINT,
+        Type.TINYINT,
+        Type.UBIGINT,
+        Type.UINT,
+        Type.UINT128,
+        Type.UINT256,
+        Type.UMEDIUMINT,
+        Type.USMALLINT,
+        Type.UTINYINT,
     }
 
     FLOAT_TYPES = {
-        Type.FLOAT,
         Type.DOUBLE,
+        Type.FLOAT,
+    }
+
+    REAL_TYPES = {
+        *FLOAT_TYPES,
+        Type.BIGDECIMAL,
+        Type.DECIMAL,
+        Type.MONEY,
+        Type.SMALLMONEY,
+        Type.UDECIMAL,
     }
 
     NUMERIC_TYPES = {
         *INTEGER_TYPES,
-        *FLOAT_TYPES,
+        *REAL_TYPES,
     }
 
     TEMPORAL_TYPES = {
-        Type.TIME,
-        Type.TIMETZ,
-        Type.TIMESTAMP,
-        Type.TIMESTAMPTZ,
-        Type.TIMESTAMPLTZ,
-        Type.TIMESTAMP_S,
-        Type.TIMESTAMP_MS,
-        Type.TIMESTAMP_NS,
         Type.DATE,
         Type.DATE32,
         Type.DATETIME,
         Type.DATETIME64,
+        Type.TIME,
+        Type.TIMESTAMP,
+        Type.TIMESTAMPLTZ,
+        Type.TIMESTAMPTZ,
+        Type.TIMESTAMP_MS,
+        Type.TIMESTAMP_NS,
+        Type.TIMESTAMP_S,
+        Type.TIMETZ,
     }
 
     @classmethod
@@ -3926,7 +4016,13 @@ class Rollback(Expression):
 
 
 class AlterTable(Expression):
-    arg_types = {"this": True, "actions": True, "exists": False, "only": False}
+    arg_types = {
+        "this": True,
+        "actions": True,
+        "exists": False,
+        "only": False,
+        "options": False,
+    }
 
 
 class AddConstraint(Expression):
@@ -3995,6 +4091,10 @@ class Overlaps(Binary):
 
 
 class Dot(Binary):
+    @property
+    def is_star(self) -> bool:
+        return self.expression.is_star
+
     @property
     def name(self) -> str:
         return self.expression.name
@@ -4390,6 +4490,10 @@ class Anonymous(Func):
     arg_types = {"this": True, "expressions": False}
     is_var_len_args = True
 
+    @property
+    def name(self) -> str:
+        return self.this if isinstance(self.this, str) else self.this.name
+
 
 class AnonymousAggFunc(AggFunc):
     arg_types = {"this": True, "expressions": False}
@@ -4433,8 +4537,25 @@ class ToChar(Func):
     arg_types = {"this": True, "format": False, "nlsparam": False}
 
 
+# https://docs.snowflake.com/en/sql-reference/functions/to_decimal
+# https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/TO_NUMBER.html
+class ToNumber(Func):
+    arg_types = {
+        "this": True,
+        "format": False,
+        "nlsparam": False,
+        "precision": False,
+        "scale": False,
+    }
+
+
+# https://learn.microsoft.com/en-us/sql/t-sql/functions/cast-and-convert-transact-sql?view=sql-server-ver16#syntax
+class Convert(Func):
+    arg_types = {"this": True, "expression": True, "style": False}
+
+
 class GenerateSeries(Func):
-    arg_types = {"start": True, "end": True, "step": False}
+    arg_types = {"start": True, "end": True, "step": False, "is_end_exclusive": False}
 
 
 class ArrayAgg(AggFunc):
@@ -4473,8 +4594,9 @@ class ArrayFilter(Func):
     _sql_names = ["FILTER", "ARRAY_FILTER"]
 
 
-class ArrayJoin(Func):
+class ArrayToString(Func):
     arg_types = {"this": True, "expression": True, "null": False}
+    _sql_names = ["ARRAY_TO_STRING", "ARRAY_JOIN"]
 
 
 class ArrayOverlaps(Binary, Func):
@@ -4622,6 +4744,11 @@ class Concat(Func):
 
 class ConcatWs(Concat):
     _sql_names = ["CONCAT_WS"]
+
+
+# https://docs.oracle.com/cd/B13789_01/server.101/b10759/operators004.htm#i1035022
+class ConnectByRoot(Func):
+    pass
 
 
 class Count(AggFunc):
@@ -5197,6 +5324,10 @@ class Month(Func):
     pass
 
 
+class AddMonths(Func):
+    arg_types = {"this": True, "expression": True}
+
+
 class Nvl2(Func):
     arg_types = {"this": True, "true": True, "false": False}
 
@@ -5562,7 +5693,13 @@ class Use(Expression):
 
 
 class Merge(Expression):
-    arg_types = {"this": True, "using": True, "on": True, "expressions": True, "with": False}
+    arg_types = {
+        "this": True,
+        "using": True,
+        "on": True,
+        "expressions": True,
+        "with": False,
+    }
 
 
 class When(Func):
@@ -5595,8 +5732,7 @@ def maybe_parse(
     prefix: t.Optional[str] = None,
     copy: bool = False,
     **opts,
-) -> E:
-    ...
+) -> E: ...
 
 
 @t.overload
@@ -5608,8 +5744,7 @@ def maybe_parse(
     prefix: t.Optional[str] = None,
     copy: bool = False,
     **opts,
-) -> E:
-    ...
+) -> E: ...
 
 
 def maybe_parse(
@@ -5661,13 +5796,11 @@ def maybe_parse(
 
 
 @t.overload
-def maybe_copy(instance: None, copy: bool = True) -> None:
-    ...
+def maybe_copy(instance: None, copy: bool = True) -> None: ...
 
 
 @t.overload
-def maybe_copy(instance: E, copy: bool = True) -> E:
-    ...
+def maybe_copy(instance: E, copy: bool = True) -> E: ...
 
 
 def maybe_copy(instance, copy=True):
@@ -6290,15 +6423,13 @@ SAFE_IDENTIFIER_RE: t.Pattern[str] = re.compile(r"^[_a-zA-Z][\w]*$")
 
 
 @t.overload
-def to_identifier(name: None, quoted: t.Optional[bool] = None, copy: bool = True) -> None:
-    ...
+def to_identifier(name: None, quoted: t.Optional[bool] = None, copy: bool = True) -> None: ...
 
 
 @t.overload
 def to_identifier(
     name: str | Identifier, quoted: t.Optional[bool] = None, copy: bool = True
-) -> Identifier:
-    ...
+) -> Identifier: ...
 
 
 def to_identifier(name, quoted=None, copy=True):
@@ -6370,13 +6501,11 @@ def to_interval(interval: str | Literal) -> Interval:
 
 
 @t.overload
-def to_table(sql_path: str | Table, **kwargs) -> Table:
-    ...
+def to_table(sql_path: str | Table, **kwargs) -> Table: ...
 
 
 @t.overload
-def to_table(sql_path: None, **kwargs) -> None:
-    ...
+def to_table(sql_path: None, **kwargs) -> None: ...
 
 
 def to_table(
@@ -6937,7 +7066,7 @@ def replace_placeholders(expression: Expression, *args, **kwargs) -> Expression:
         if isinstance(node, Placeholder):
             if node.name:
                 new_name = kwargs.get(node.name)
-                if new_name:
+                if new_name is not None:
                     return convert(new_name)
             else:
                 try:
@@ -6951,7 +7080,7 @@ def replace_placeholders(expression: Expression, *args, **kwargs) -> Expression:
 
 def expand(
     expression: Expression,
-    sources: t.Dict[str, Subqueryable],
+    sources: t.Dict[str, Query],
     dialect: DialectType = None,
     copy: bool = True,
 ) -> Expression:
@@ -6967,7 +7096,7 @@ def expand(
 
     Args:
         expression: The expression to expand.
-        sources: A dictionary of name to Subqueryables.
+        sources: A dictionary of name to Queries.
         dialect: The dialect of the sources dict.
         copy: Whether to copy the expression during transformation. Defaults to True.
 

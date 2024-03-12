@@ -592,7 +592,7 @@ def date_diff(end: ColumnOrName, start: ColumnOrName) -> Column:
 
 
 def add_months(start: ColumnOrName, months: t.Union[ColumnOrName, int]) -> Column:
-    return Column.invoke_anonymous_function(start, "ADD_MONTHS", months)
+    return Column.invoke_expression_over_column(start, expression.AddMonths, expression=months)
 
 
 def months_between(
@@ -971,10 +971,10 @@ def array_join(
 ) -> Column:
     if null_replacement is not None:
         return Column.invoke_expression_over_column(
-            col, expression.ArrayJoin, expression=lit(delimiter), null=lit(null_replacement)
+            col, expression.ArrayToString, expression=lit(delimiter), null=lit(null_replacement)
         )
     return Column.invoke_expression_over_column(
-        col, expression.ArrayJoin, expression=lit(delimiter)
+        col, expression.ArrayToString, expression=lit(delimiter)
     )
 
 

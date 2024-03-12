@@ -1,4 +1,4 @@
-from sqlglot import exp, parse_one
+from sqlglot import exp
 from sqlglot.errors import UnsupportedError
 from tests.dialects.test_dialect import Validator
 
@@ -7,11 +7,18 @@ class TestOracle(Validator):
     dialect = "oracle"
 
     def test_oracle(self):
-        self.validate_identity("REGEXP_REPLACE('source', 'search')")
-        parse_one("ALTER TABLE tbl_name DROP FOREIGN KEY fk_symbol", dialect="oracle").assert_is(
-            exp.AlterTable
+        self.validate_all(
+            "SELECT CONNECT_BY_ROOT x y",
+            write={
+                "": "SELECT CONNECT_BY_ROOT(x) AS y",
+                "oracle": "SELECT CONNECT_BY_ROOT x AS y",
+            },
         )
+        self.parse_one("ALTER TABLE tbl_name DROP FOREIGN KEY fk_symbol").assert_is(exp.AlterTable)
 
+        self.validate_identity("CREATE GLOBAL TEMPORARY TABLE t AS SELECT * FROM orders")
+        self.validate_identity("CREATE PRIVATE TEMPORARY TABLE t AS SELECT * FROM orders")
+        self.validate_identity("REGEXP_REPLACE('source', 'search')")
         self.validate_identity("TIMESTAMP(3) WITH TIME ZONE")
         self.validate_identity("CURRENT_TIMESTAMP(precision)")
         self.validate_identity("ALTER TABLE tbl_name DROP FOREIGN KEY fk_symbol")
@@ -89,10 +96,73 @@ class TestOracle(Validator):
         self.validate_identity("SELECT TO_CHAR(-100, 'L99', 'NL_CURRENCY = '' AusDollars '' ')")
 
         self.validate_all(
+            "CURRENT_TIMESTAMP BETWEEN TO_DATE(f.C_SDATE, 'yyyy/mm/dd') AND TO_DATE(f.C_EDATE, 'yyyy/mm/dd')",
+            read={
+                "postgres": "CURRENT_TIMESTAMP BETWEEN TO_DATE(f.C_SDATE, 'yyyy/mm/dd') AND TO_DATE(f.C_EDATE, 'yyyy/mm/dd')",
+            },
+            write={
+                "oracle": "CURRENT_TIMESTAMP BETWEEN TO_DATE(f.C_SDATE, 'yyyy/mm/dd') AND TO_DATE(f.C_EDATE, 'yyyy/mm/dd')",
+                "postgres": "CURRENT_TIMESTAMP BETWEEN TO_DATE(f.C_SDATE, 'yyyy/mm/dd') AND TO_DATE(f.C_EDATE, 'yyyy/mm/dd')",
+            },
+        )
+        self.validate_all(
             "TO_CHAR(x)",
             write={
                 "doris": "CAST(x AS STRING)",
                 "oracle": "TO_CHAR(x)",
+            },
+        )
+        self.validate_all(
+            "TO_NUMBER(expr, fmt, nlsparam)",
+            read={
+                "teradata": "TO_NUMBER(expr, fmt, nlsparam)",
+            },
+            write={
+                "oracle": "TO_NUMBER(expr, fmt, nlsparam)",
+                "teradata": "TO_NUMBER(expr, fmt, nlsparam)",
+            },
+        )
+        self.validate_all(
+            "TO_NUMBER(x)",
+            write={
+                "bigquery": "CAST(x AS FLOAT64)",
+                "doris": "CAST(x AS DOUBLE)",
+                "drill": "CAST(x AS DOUBLE)",
+                "duckdb": "CAST(x AS DOUBLE)",
+                "hive": "CAST(x AS DOUBLE)",
+                "mysql": "CAST(x AS DOUBLE)",
+                "oracle": "TO_NUMBER(x)",
+                "postgres": "CAST(x AS DOUBLE PRECISION)",
+                "presto": "CAST(x AS DOUBLE)",
+                "redshift": "CAST(x AS DOUBLE PRECISION)",
+                "snowflake": "TO_NUMBER(x)",
+                "spark": "CAST(x AS DOUBLE)",
+                "spark2": "CAST(x AS DOUBLE)",
+                "starrocks": "CAST(x AS DOUBLE)",
+                "tableau": "CAST(x AS DOUBLE)",
+                "teradata": "TO_NUMBER(x)",
+            },
+        )
+        self.validate_all(
+            "TO_NUMBER(x, fmt)",
+            read={
+                "databricks": "TO_NUMBER(x, fmt)",
+                "drill": "TO_NUMBER(x, fmt)",
+                "postgres": "TO_NUMBER(x, fmt)",
+                "snowflake": "TO_NUMBER(x, fmt)",
+                "spark": "TO_NUMBER(x, fmt)",
+                "redshift": "TO_NUMBER(x, fmt)",
+                "teradata": "TO_NUMBER(x, fmt)",
+            },
+            write={
+                "databricks": "TO_NUMBER(x, fmt)",
+                "drill": "TO_NUMBER(x, fmt)",
+                "oracle": "TO_NUMBER(x, fmt)",
+                "postgres": "TO_NUMBER(x, fmt)",
+                "snowflake": "TO_NUMBER(x, fmt)",
+                "spark": "TO_NUMBER(x, fmt)",
+                "redshift": "TO_NUMBER(x, fmt)",
+                "teradata": "TO_NUMBER(x, fmt)",
             },
         )
         self.validate_all(
@@ -203,6 +273,8 @@ class TestOracle(Validator):
         self.validate_identity(
             "SELECT /*+ LEADING(e j) */ * FROM employees e, departments d, job_history j WHERE e.department_id = d.department_id AND e.hire_date = j.start_date"
         )
+        self.validate_identity("INSERT /*+ APPEND */ INTO IAP_TBL (id, col1) VALUES (2, 'test2')")
+        self.validate_identity("INSERT /*+ APPEND_VALUES */ INTO dest_table VALUES (i, 'Value')")
 
     def test_xml_table(self):
         self.validate_identity("XMLTABLE('x')")

@@ -1,10 +1,16 @@
 from tests.dialects.test_dialect import Validator
 
+from sqlglot.helper import logger as helper_logger
+
 
 class TestSQLite(Validator):
     dialect = "sqlite"
 
     def test_ddl(self):
+        for conflict_action in ("ABORT", "FAIL", "IGNORE", "REPLACE", "ROLLBACK"):
+            with self.subTest(f"ON CONFLICT {conflict_action}"):
+                self.validate_identity("CREATE TABLE a (b, c, UNIQUE (b, c) ON CONFLICT IGNORE)")
+
         self.validate_identity("INSERT OR ABORT INTO foo (x, y) VALUES (1, 2)")
         self.validate_identity("INSERT OR FAIL INTO foo (x, y) VALUES (1, 2)")
         self.validate_identity("INSERT OR IGNORE INTO foo (x, y) VALUES (1, 2)")
@@ -76,6 +82,7 @@ class TestSQLite(Validator):
         self.validate_identity(
             """SELECT item AS "item", some AS "some" FROM data WHERE (item = 'value_1' COLLATE NOCASE) AND (some = 't' COLLATE NOCASE) ORDER BY item ASC LIMIT 1 OFFSET 0"""
         )
+        self.validate_identity("SELECT * FROM GENERATE_SERIES(1, 5)")
 
         self.validate_all("SELECT LIKE(y, x)", write={"sqlite": "SELECT x LIKE y"})
         self.validate_all("SELECT GLOB('*y*', 'xyz')", write={"sqlite": "SELECT 'xyz' GLOB '*y*'"})
@@ -178,3 +185,12 @@ class TestSQLite(Validator):
             "CREATE TABLE foo (bar LONGVARCHAR)",
             write={"sqlite": "CREATE TABLE foo (bar TEXT)"},
         )
+
+    def test_warnings(self):
+        with self.assertLogs(helper_logger) as cm:
+            self.validate_identity(
+                "SELECT * FROM t AS t(c1, c2)",
+                "SELECT * FROM t AS t",
+            )
+
+            self.assertIn("Named columns are not supported in table alias.", cm.output[0])

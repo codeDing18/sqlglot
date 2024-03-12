@@ -1,4 +1,4 @@
-from sqlglot import ParseError, UnsupportedError, exp, parse_one, transpile
+from sqlglot import ParseError, UnsupportedError, exp, transpile
 from sqlglot.helper import logger as helper_logger
 from tests.dialects.test_dialect import Validator
 
@@ -8,29 +8,16 @@ class TestPostgres(Validator):
     dialect = "postgres"
 
     def test_postgres(self):
+        self.validate_identity("1.x", "1. AS x")
         self.validate_identity("|/ x", "SQRT(x)")
         self.validate_identity("||/ x", "CBRT(x)")
-        expr = parse_one(
-            "SELECT * FROM r CROSS JOIN LATERAL UNNEST(ARRAY[1]) AS s(location)", read="postgres"
-        )
+
+        expr = self.parse_one("SELECT * FROM r CROSS JOIN LATERAL UNNEST(ARRAY[1]) AS s(location)")
         unnest = expr.args["joins"][0].this.this
         unnest.assert_is(exp.Unnest)
 
         alter_table_only = """ALTER TABLE ONLY "Album" ADD CONSTRAINT "FK_AlbumArtistId" FOREIGN KEY ("ArtistId") REFERENCES "Artist" ("ArtistId") ON DELETE NO ACTION ON UPDATE NO ACTION"""
-        expr = parse_one(alter_table_only, read="postgres")
-
-        # Checks that user-defined types are parsed into DataType instead of Identifier
-        parse_one("CREATE TABLE t (a udt)", read="postgres").this.expressions[0].args[
-            "kind"
-        ].assert_is(exp.DataType)
-
-        # Checks that OID is parsed into a DataType (ObjectIdentifier)
-        self.assertIsInstance(
-            parse_one("CREATE TABLE public.propertydata (propertyvalue oid)", read="postgres").find(
-                exp.DataType
-            ),
-            exp.ObjectIdentifier,
-        )
+        expr = self.parse_one(alter_table_only)
 
         self.assertIsInstance(expr, exp.AlterTable)
         self.assertEqual(expr.sql(dialect="postgres"), alter_table_only)
@@ -82,6 +69,7 @@ class TestPostgres(Validator):
         self.validate_identity("CAST(1 AS DECIMAL) / CAST(2 AS DECIMAL) * -100")
         self.validate_identity("EXEC AS myfunc @id = 123", check_command_warning=True)
         self.validate_identity("SELECT CURRENT_USER")
+        self.validate_identity("SELECT * FROM ONLY t1")
         self.validate_identity(
             """LAST_VALUE("col1") OVER (ORDER BY "col2" RANGE BETWEEN INTERVAL '1 DAY' PRECEDING AND '1 month' FOLLOWING)"""
         )
@@ -102,9 +90,6 @@ class TestPostgres(Validator):
         )
         self.validate_identity(
             "SELECT SUM(x) OVER a, SUM(y) OVER b FROM c WINDOW a AS (PARTITION BY d), b AS (PARTITION BY e)"
-        )
-        self.validate_identity(
-            "CREATE TABLE A (LIKE B INCLUDING CONSTRAINT INCLUDING COMPRESSION EXCLUDING COMMENTS)"
         )
         self.validate_identity(
             "SELECT CASE WHEN SUBSTRING('abcdefg' FROM 1) IN ('ab') THEN 1 ELSE 0 END"
@@ -162,6 +147,9 @@ class TestPostgres(Validator):
         self.validate_identity(
             "SELECT $$Dianne's horse$$",
             "SELECT 'Dianne''s horse'",
+        )
+        self.validate_identity(
+            "COMMENT ON TABLE mytable IS $$doc this$$", "COMMENT ON TABLE mytable IS 'doc this'"
         )
         self.validate_identity(
             "UPDATE MYTABLE T1 SET T1.COL = 13",
@@ -320,6 +308,7 @@ class TestPostgres(Validator):
             "MERGE INTO x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET x.a = y.b WHEN NOT MATCHED THEN INSERT (a, b) VALUES (y.a, y.b)",
             "MERGE INTO x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET a = y.b WHEN NOT MATCHED THEN INSERT (a, b) VALUES (y.a, y.b)",
         )
+        self.validate_identity("SELECT * FROM t1*", "SELECT * FROM t1")
 
         self.validate_all(
             "SELECT JSON_EXTRACT_PATH_TEXT(x, k1, k2, k3) FROM t",
@@ -511,15 +500,6 @@ class TestPostgres(Validator):
             },
         )
         self.validate_all(
-            "CREATE TABLE x (a UUID, b BYTEA)",
-            write={
-                "duckdb": "CREATE TABLE x (a UUID, b BLOB)",
-                "presto": "CREATE TABLE x (a UUID, b VARBINARY)",
-                "hive": "CREATE TABLE x (a UUID, b BINARY)",
-                "spark": "CREATE TABLE x (a UUID, b BINARY)",
-            },
-        )
-        self.validate_all(
             "SELECT * FROM x FETCH 1 ROW",
             write={
                 "postgres": "SELECT * FROM x FETCH FIRST 1 ROWS ONLY",
@@ -629,10 +609,20 @@ class TestPostgres(Validator):
             },
         )
 
-        self.assertIsInstance(parse_one("id::UUID", read="postgres"), exp.Cast)
+        self.assertIsInstance(self.parse_one("id::UUID"), exp.Cast)
 
     def test_ddl(self):
-        expr = parse_one("CREATE TABLE t (x INTERVAL day)", read="postgres")
+        # Checks that user-defined types are parsed into DataType instead of Identifier
+        self.parse_one("CREATE TABLE t (a udt)").this.expressions[0].args["kind"].assert_is(
+            exp.DataType
+        )
+
+        # Checks that OID is parsed into a DataType (ObjectIdentifier)
+        self.assertIsInstance(
+            self.parse_one("CREATE TABLE p.t (c oid)").find(exp.DataType), exp.ObjectIdentifier
+        )
+
+        expr = self.parse_one("CREATE TABLE t (x INTERVAL day)")
         cdef = expr.find(exp.ColumnDef)
         cdef.args["kind"].assert_is(exp.DataType)
         self.assertEqual(expr.sql(dialect="postgres"), "CREATE TABLE t (x INTERVAL DAY)")
@@ -653,6 +643,27 @@ class TestPostgres(Validator):
         self.validate_identity("CREATE TABLE t (c CHAR(2) UNIQUE NOT NULL) INHERITS (t1)")
         self.validate_identity("CREATE TABLE s.t (c CHAR(2) UNIQUE NOT NULL) INHERITS (s.t1, s.t2)")
         self.validate_identity("CREATE FUNCTION x(INT) RETURNS INT SET search_path = 'public'")
+        self.validate_identity("TRUNCATE TABLE t1 CONTINUE IDENTITY")
+        self.validate_identity("TRUNCATE TABLE t1 RESTART IDENTITY")
+        self.validate_identity("TRUNCATE TABLE t1 CASCADE")
+        self.validate_identity("TRUNCATE TABLE t1 RESTRICT")
+        self.validate_identity("TRUNCATE TABLE t1 CONTINUE IDENTITY CASCADE")
+        self.validate_identity("TRUNCATE TABLE t1 RESTART IDENTITY RESTRICT")
+        self.validate_identity(
+            "CREATE TABLE t (vid INT NOT NULL, CONSTRAINT ht_vid_nid_fid_idx EXCLUDE (INT4RANGE(vid, nid) WITH &&, INT4RANGE(fid, fid, '[]') WITH &&))"
+        )
+        self.validate_identity(
+            "CREATE TABLE t (i INT, PRIMARY KEY (i), EXCLUDE USING gist(col varchar_pattern_ops DESC NULLS LAST WITH &&) WITH (sp1=1, sp2=2))"
+        )
+        self.validate_identity(
+            "CREATE TABLE t (i INT, EXCLUDE USING btree(INT4RANGE(vid, nid, '[]') ASC NULLS FIRST WITH &&) INCLUDE (col1, col2))"
+        )
+        self.validate_identity(
+            "CREATE TABLE t (i INT, EXCLUDE USING gin(col1 WITH &&, col2 WITH ||) USING INDEX TABLESPACE tablespace WHERE (id > 5))"
+        )
+        self.validate_identity(
+            "CREATE TABLE A (LIKE B INCLUDING CONSTRAINT INCLUDING COMPRESSION EXCLUDING COMMENTS)"
+        )
         self.validate_identity(
             "CREATE TABLE cust_part3 PARTITION OF customers FOR VALUES WITH (MODULUS 3, REMAINDER 2)"
         )
@@ -678,13 +689,13 @@ class TestPostgres(Validator):
             "CREATE INDEX index_issues_on_title_trigram ON public.issues USING gin(title public.gin_trgm_ops)"
         )
         self.validate_identity(
-            "INSERT INTO x VALUES (1, 'a', 2.0) ON CONFLICT (id) DO NOTHING RETURNING *"
+            "INSERT INTO x VALUES (1, 'a', 2.0) ON CONFLICT(id) DO NOTHING RETURNING *"
         )
         self.validate_identity(
-            "INSERT INTO x VALUES (1, 'a', 2.0) ON CONFLICT (id) DO UPDATE SET x.id = 1 RETURNING *"
+            "INSERT INTO x VALUES (1, 'a', 2.0) ON CONFLICT(id) DO UPDATE SET x.id = 1 RETURNING *"
         )
         self.validate_identity(
-            "INSERT INTO x VALUES (1, 'a', 2.0) ON CONFLICT (id) DO UPDATE SET x.id = excluded.id RETURNING *"
+            "INSERT INTO x VALUES (1, 'a', 2.0) ON CONFLICT(id) DO UPDATE SET x.id = excluded.id RETURNING *"
         )
         self.validate_identity(
             "INSERT INTO x VALUES (1, 'a', 2.0) ON CONFLICT ON CONSTRAINT pkey DO NOTHING RETURNING *"
@@ -727,8 +738,7 @@ class TestPostgres(Validator):
             check_command_warning=True,
         )
         self.validate_identity(
-            "CREATE UNLOGGED TABLE foo AS WITH t(c) AS (SELECT 1) SELECT * FROM (SELECT c AS c FROM t) AS temp",
-            check_command_warning=True,
+            "CREATE UNLOGGED TABLE foo AS WITH t(c) AS (SELECT 1) SELECT * FROM (SELECT c AS c FROM t) AS temp"
         )
         self.validate_identity(
             "CREATE FUNCTION x(INT) RETURNS INT SET search_path TO 'public'",
@@ -785,6 +795,20 @@ class TestPostgres(Validator):
         self.validate_identity(
             "CREATE INDEX index_ci_pipelines_on_project_idandrefandiddesc ON public.ci_pipelines USING btree(project_id, ref, id DESC)"
         )
+        self.validate_identity(
+            "TRUNCATE TABLE ONLY t1, t2*, ONLY t3, t4, t5* RESTART IDENTITY CASCADE",
+            "TRUNCATE TABLE ONLY t1, t2, ONLY t3, t4, t5 RESTART IDENTITY CASCADE",
+        )
+
+        self.validate_all(
+            "CREATE TABLE x (a UUID, b BYTEA)",
+            write={
+                "duckdb": "CREATE TABLE x (a UUID, b BLOB)",
+                "presto": "CREATE TABLE x (a UUID, b VARBINARY)",
+                "hive": "CREATE TABLE x (a UUID, b BINARY)",
+                "spark": "CREATE TABLE x (a UUID, b BINARY)",
+            },
+        )
 
         with self.assertRaises(ParseError):
             transpile("CREATE TABLE products (price DECIMAL CHECK price > 0)", read="postgres")
@@ -840,7 +864,7 @@ class TestPostgres(Validator):
             )
 
     def test_operator(self):
-        expr = parse_one("1 OPERATOR(+) 2 OPERATOR(*) 3", read="postgres")
+        expr = self.parse_one("1 OPERATOR(+) 2 OPERATOR(*) 3")
 
         expr.left.assert_is(exp.Operator)
         expr.left.left.assert_is(exp.Literal)
@@ -909,5 +933,33 @@ class TestPostgres(Validator):
 
     def test_regexp_binary(self):
         """See https://github.com/tobymao/sqlglot/pull/2404 for details."""
-        self.assertIsInstance(parse_one("'thomas' ~ '.*thomas.*'", read="postgres"), exp.Binary)
-        self.assertIsInstance(parse_one("'thomas' ~* '.*thomas.*'", read="postgres"), exp.Binary)
+        self.assertIsInstance(self.parse_one("'thomas' ~ '.*thomas.*'"), exp.Binary)
+        self.assertIsInstance(self.parse_one("'thomas' ~* '.*thomas.*'"), exp.Binary)
+
+    def test_unnest_json_array(self):
+        trino_input = """
+            WITH t(boxcrate) AS (
+              SELECT JSON '[{"boxes": [{"name": "f1", "type": "plant", "color": "red"}]}]'
+            )
+            SELECT
+              JSON_EXTRACT_SCALAR(boxes,'$.name')  AS name,
+              JSON_EXTRACT_SCALAR(boxes,'$.type')  AS type,
+              JSON_EXTRACT_SCALAR(boxes,'$.color') AS color
+            FROM t
+            CROSS JOIN UNNEST(CAST(boxcrate AS array(json))) AS x(tbox)
+            CROSS JOIN UNNEST(CAST(json_extract(tbox, '$.boxes') AS array(json))) AS y(boxes)
+        """
+
+        expected_postgres = """WITH t(boxcrate) AS (
+  SELECT
+    CAST('[{"boxes": [{"name": "f1", "type": "plant", "color": "red"}]}]' AS JSON)
+)
+SELECT
+  JSON_EXTRACT_PATH_TEXT(boxes, 'name') AS name,
+  JSON_EXTRACT_PATH_TEXT(boxes, 'type') AS type,
+  JSON_EXTRACT_PATH_TEXT(boxes, 'color') AS color
+FROM t
+CROSS JOIN JSON_ARRAY_ELEMENTS(CAST(boxcrate AS JSON)) AS x(tbox)
+CROSS JOIN JSON_ARRAY_ELEMENTS(CAST(JSON_EXTRACT_PATH(tbox, 'boxes') AS JSON)) AS y(boxes)"""
+
+        self.validate_all(expected_postgres, read={"trino": trino_input}, pretty=True)

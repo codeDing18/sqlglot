@@ -31,6 +31,7 @@ class Dialects(str, Enum):
 
     DIALECT = ""
 
+    ATHENA = "athena"
     BIGQUERY = "bigquery"
     CLICKHOUSE = "clickhouse"
     DATABRICKS = "databricks"
@@ -42,6 +43,7 @@ class Dialects(str, Enum):
     ORACLE = "oracle"
     POSTGRES = "postgres"
     PRESTO = "presto"
+    PRQL = "prql"
     REDSHIFT = "redshift"
     SNOWFLAKE = "snowflake"
     SPARK = "spark"
@@ -136,6 +138,13 @@ class _Dialect(type):
 
         if enum not in ("", "bigquery"):
             klass.generator_class.SELECT_KINDS = ()
+
+        if enum not in ("", "databricks", "hive", "spark", "spark2"):
+            modifier_transforms = klass.generator_class.AFTER_HAVING_MODIFIER_TRANSFORMS.copy()
+            for modifier in ("cluster", "distribute", "sort"):
+                modifier_transforms.pop(modifier, None)
+
+            klass.generator_class.AFTER_HAVING_MODIFIER_TRANSFORMS = modifier_transforms
 
         if not klass.SUPPORTS_SEMI_ANTI_JOIN:
             klass.parser_class.TABLE_ALIAS_TOKENS = klass.parser_class.TABLE_ALIAS_TOKENS | {
@@ -443,7 +452,7 @@ class Dialect(metaclass=_Dialect):
             identify: If set to `False`, the quotes will only be added if the identifier is deemed
                 "unsafe", with respect to its characters and this dialect's normalization strategy.
         """
-        if isinstance(expression, exp.Identifier):
+        if isinstance(expression, exp.Identifier) and not isinstance(expression.parent, exp.Func):
             name = expression.this
             expression.set(
                 "quoted",
@@ -1070,3 +1079,12 @@ def filter_array_using_unnest(self: Generator, expression: exp.ArrayFilter) -> s
     unnest = exp.Unnest(expressions=[expression.this])
     filtered = exp.select(alias).from_(exp.alias_(unnest, None, table=[alias])).where(cond)
     return self.sql(exp.Array(expressions=[filtered]))
+
+
+def to_number_with_nls_param(self, expression: exp.ToNumber) -> str:
+    return self.func(
+        "TO_NUMBER",
+        expression.this,
+        expression.args.get("format"),
+        expression.args.get("nlsparam"),
+    )

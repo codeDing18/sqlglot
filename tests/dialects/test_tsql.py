@@ -1,6 +1,7 @@
 from sqlglot import exp, parse, parse_one
 from sqlglot.parser import logger as parser_logger
 from tests.dialects.test_dialect import Validator
+from sqlglot.errors import ParseError
 
 
 class TestTSQL(Validator):
@@ -27,6 +28,7 @@ class TestTSQL(Validator):
         self.validate_identity("SELECT * FROM t WHERE NOT c", "SELECT * FROM t WHERE NOT c <> 0")
         self.validate_identity("1 AND true", "1 <> 0 AND (1 = 1)")
         self.validate_identity("CAST(x AS int) OR y", "CAST(x AS INTEGER) <> 0 OR y <> 0")
+        self.validate_identity("TRUNCATE TABLE t1 WITH (PARTITIONS(1, 2 TO 5, 10 TO 20, 84))")
 
         self.validate_all(
             "SELECT IIF(cond <> 0, 'True', 'False')",
@@ -142,7 +144,7 @@ class TestTSQL(Validator):
                 "tsql": "CREATE TABLE #mytemptable (a INTEGER)",
                 "snowflake": "CREATE TEMPORARY TABLE mytemptable (a INT)",
                 "duckdb": "CREATE TEMPORARY TABLE mytemptable (a INT)",
-                "oracle": "CREATE TEMPORARY TABLE mytemptable (a NUMBER)",
+                "oracle": "CREATE GLOBAL TEMPORARY TABLE mytemptable (a NUMBER)",
                 "hive": "CREATE TEMPORARY TABLE mytemptable (a INT)",
                 "spark2": "CREATE TEMPORARY TABLE mytemptable (a INT) USING PARQUET",
                 "spark": "CREATE TEMPORARY TABLE mytemptable (a INT) USING PARQUET",
@@ -281,7 +283,7 @@ class TestTSQL(Validator):
             "CONVERT(INT, CONVERT(NUMERIC, '444.75'))",
             write={
                 "mysql": "CAST(CAST('444.75' AS DECIMAL) AS SIGNED)",
-                "tsql": "CAST(CAST('444.75' AS NUMERIC) AS INTEGER)",
+                "tsql": "CONVERT(INTEGER, CONVERT(NUMERIC, '444.75'))",
             },
         )
         self.validate_all(
@@ -355,6 +357,76 @@ class TestTSQL(Validator):
         )
         self.validate_identity("HASHBYTES('MD2', 'x')")
         self.validate_identity("LOG(n, b)")
+
+    def test_option(self):
+        possible_options = [
+            "HASH GROUP",
+            "ORDER GROUP",
+            "CONCAT UNION",
+            "HASH UNION",
+            "MERGE UNION",
+            "LOOP JOIN",
+            "MERGE JOIN",
+            "HASH JOIN",
+            "DISABLE_OPTIMIZED_PLAN_FORCING",
+            "EXPAND VIEWS",
+            "FAST 15",
+            "FORCE ORDER",
+            "FORCE EXTERNALPUSHDOWN",
+            "DISABLE EXTERNALPUSHDOWN",
+            "FORCE SCALEOUTEXECUTION",
+            "DISABLE SCALEOUTEXECUTION",
+            "IGNORE_NONCLUSTERED_COLUMNSTORE_INDEX",
+            "KEEP PLAN",
+            "KEEPFIXED PLAN",
+            "MAX_GRANT_PERCENT = 5",
+            "MIN_GRANT_PERCENT = 10",
+            "MAXDOP 13",
+            "MAXRECURSION 8",
+            "NO_PERFORMANCE_SPOOL",
+            "OPTIMIZE FOR UNKNOWN",
+            "PARAMETERIZATION SIMPLE",
+            "PARAMETERIZATION FORCED",
+            "QUERYTRACEON 99",
+            "RECOMPILE",
+            "ROBUST PLAN",
+            "USE PLAN N'<xml_plan>'",
+            "LABEL = 'MyLabel'",
+        ]
+
+        possible_statements = [
+            # These should be un-commented once support for the OPTION clause is added for DELETE, MERGE and UPDATE
+            # "DELETE FROM Table1",
+            # "MERGE INTO Locations AS T USING locations_stage AS S ON T.LocationID = S.LocationID WHEN MATCHED THEN UPDATE SET LocationName = S.LocationName",
+            # "UPDATE Customers SET ContactName = 'Alfred Schmidt', City = 'Frankfurt' WHERE CustomerID = 1",
+            "SELECT * FROM Table1",
+            "SELECT * FROM Table1 WHERE id = 2",
+        ]
+
+        for statement in possible_statements:
+            for option in possible_options:
+                query = f"{statement} OPTION({option})"
+                result = self.validate_identity(query)
+                options = result.args.get("options")
+                self.assertIsInstance(options, list, f"When parsing query {query}")
+                is_query_options = map(lambda o: isinstance(o, exp.QueryOption), options)
+                self.assertTrue(all(is_query_options), f"When parsing query {query}")
+
+            self.validate_identity(
+                f"{statement} OPTION(RECOMPILE, USE PLAN N'<xml_plan>', MAX_GRANT_PERCENT = 5)"
+            )
+
+        raising_queries = [
+            # Missing parentheses
+            "SELECT * FROM Table1 OPTION HASH GROUP",
+            # Must be followed by 'PLAN"
+            "SELECT * FROM Table1 OPTION(KEEPFIXED)",
+            # Missing commas
+            "SELECT * FROM Table1 OPTION(HASH GROUP HASH GROUP)",
+        ]
+        for query in raising_queries:
+            with self.assertRaises(ParseError, msg=f"When running '{query}'"):
+                self.parse_one(query)
 
     def test_types(self):
         self.validate_identity("CAST(x AS XML)")
@@ -525,7 +597,7 @@ class TestTSQL(Validator):
             "CAST(x as NCHAR(1))",
             write={
                 "spark": "CAST(x AS CHAR(1))",
-                "tsql": "CAST(x AS CHAR(1))",
+                "tsql": "CAST(x AS NCHAR(1))",
             },
         )
 
@@ -533,7 +605,7 @@ class TestTSQL(Validator):
             "CAST(x as NVARCHAR(2))",
             write={
                 "spark": "CAST(x AS VARCHAR(2))",
-                "tsql": "CAST(x AS VARCHAR(2))",
+                "tsql": "CAST(x AS NVARCHAR(2))",
             },
         )
 
@@ -692,12 +764,7 @@ class TestTSQL(Validator):
             "SELECT * INTO foo.bar.baz FROM (SELECT * FROM a.b.c) AS temp",
             read={
                 "": "CREATE TABLE foo.bar.baz AS SELECT * FROM a.b.c",
-            },
-        )
-        self.validate_all(
-            "SELECT * INTO foo.bar.baz FROM (SELECT * FROM a.b.c) AS temp",
-            read={
-                "": "CREATE TABLE foo.bar.baz AS (SELECT * FROM a.b.c)",
+                "duckdb": "CREATE TABLE foo.bar.baz AS (SELECT * FROM a.b.c)",
             },
         )
         self.validate_all(
@@ -759,11 +826,6 @@ class TestTSQL(Validator):
         )
 
     def test_transaction(self):
-        # BEGIN { TRAN | TRANSACTION }
-        #    [ { transaction_name | @tran_name_variable }
-        #    [ WITH MARK [ 'description' ] ]
-        #    ]
-        # [ ; ]
         self.validate_identity("BEGIN TRANSACTION")
         self.validate_all("BEGIN TRAN", write={"tsql": "BEGIN TRANSACTION"})
         self.validate_identity("BEGIN TRANSACTION transaction_name")
@@ -771,8 +833,6 @@ class TestTSQL(Validator):
         self.validate_identity("BEGIN TRANSACTION transaction_name WITH MARK 'description'")
 
     def test_commit(self):
-        # COMMIT [ { TRAN | TRANSACTION }  [ transaction_name | @tran_name_variable ] ] [ WITH ( DELAYED_DURABILITY = { OFF | ON } ) ] [ ; ]
-
         self.validate_all("COMMIT", write={"tsql": "COMMIT TRANSACTION"})
         self.validate_all("COMMIT TRAN", write={"tsql": "COMMIT TRANSACTION"})
         self.validate_identity("COMMIT TRANSACTION")
@@ -787,11 +847,6 @@ class TestTSQL(Validator):
         )
 
     def test_rollback(self):
-        # Applies to SQL Server and Azure SQL Database
-        # ROLLBACK { TRAN | TRANSACTION }
-        #     [ transaction_name | @tran_name_variable
-        #     | savepoint_name | @savepoint_variable ]
-        # [ ; ]
         self.validate_all("ROLLBACK", write={"tsql": "ROLLBACK TRANSACTION"})
         self.validate_all("ROLLBACK TRAN", write={"tsql": "ROLLBACK TRANSACTION"})
         self.validate_identity("ROLLBACK TRANSACTION")
@@ -911,7 +966,7 @@ WHERE
 
         expected_sqls = [
             "CREATE PROC [dbo].[transform_proc] AS DECLARE @CurrentDate VARCHAR(20)",
-            "SET @CurrentDate = CAST(FORMAT(GETDATE(), 'yyyy-MM-dd HH:mm:ss') AS VARCHAR(20))",
+            "SET @CurrentDate = CONVERT(VARCHAR(20), GETDATE(), 120)",
             "CREATE TABLE [target_schema].[target_table] (a INTEGER) WITH (DISTRIBUTION=REPLICATE, HEAP)",
         ]
 
@@ -1090,155 +1145,173 @@ WHERE
             },
         )
 
-    def test_convert_date_format(self):
+    def test_convert(self):
         self.validate_all(
             "CONVERT(NVARCHAR(200), x)",
             write={
                 "spark": "CAST(x AS VARCHAR(200))",
+                "tsql": "CONVERT(NVARCHAR(200), x)",
             },
         )
         self.validate_all(
             "CONVERT(NVARCHAR, x)",
             write={
                 "spark": "CAST(x AS VARCHAR(30))",
+                "tsql": "CONVERT(NVARCHAR, x)",
             },
         )
         self.validate_all(
             "CONVERT(NVARCHAR(MAX), x)",
             write={
                 "spark": "CAST(x AS STRING)",
+                "tsql": "CONVERT(NVARCHAR(MAX), x)",
             },
         )
         self.validate_all(
             "CONVERT(VARCHAR(200), x)",
             write={
                 "spark": "CAST(x AS VARCHAR(200))",
+                "tsql": "CONVERT(VARCHAR(200), x)",
             },
         )
         self.validate_all(
             "CONVERT(VARCHAR, x)",
             write={
                 "spark": "CAST(x AS VARCHAR(30))",
+                "tsql": "CONVERT(VARCHAR, x)",
             },
         )
         self.validate_all(
             "CONVERT(VARCHAR(MAX), x)",
             write={
                 "spark": "CAST(x AS STRING)",
+                "tsql": "CONVERT(VARCHAR(MAX), x)",
             },
         )
         self.validate_all(
             "CONVERT(CHAR(40), x)",
             write={
                 "spark": "CAST(x AS CHAR(40))",
+                "tsql": "CONVERT(CHAR(40), x)",
             },
         )
         self.validate_all(
             "CONVERT(CHAR, x)",
             write={
                 "spark": "CAST(x AS CHAR(30))",
+                "tsql": "CONVERT(CHAR, x)",
             },
         )
         self.validate_all(
             "CONVERT(NCHAR(40), x)",
             write={
                 "spark": "CAST(x AS CHAR(40))",
+                "tsql": "CONVERT(NCHAR(40), x)",
             },
         )
         self.validate_all(
             "CONVERT(NCHAR, x)",
             write={
                 "spark": "CAST(x AS CHAR(30))",
+                "tsql": "CONVERT(NCHAR, x)",
             },
         )
         self.validate_all(
             "CONVERT(VARCHAR, x, 121)",
             write={
                 "spark": "CAST(DATE_FORMAT(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS VARCHAR(30))",
+                "tsql": "CONVERT(VARCHAR, x, 121)",
             },
         )
         self.validate_all(
             "CONVERT(VARCHAR(40), x, 121)",
             write={
                 "spark": "CAST(DATE_FORMAT(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS VARCHAR(40))",
+                "tsql": "CONVERT(VARCHAR(40), x, 121)",
             },
         )
         self.validate_all(
             "CONVERT(VARCHAR(MAX), x, 121)",
             write={
-                "spark": "DATE_FORMAT(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS')",
+                "spark": "CAST(DATE_FORMAT(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS STRING)",
+                "tsql": "CONVERT(VARCHAR(MAX), x, 121)",
             },
         )
         self.validate_all(
             "CONVERT(NVARCHAR, x, 121)",
             write={
                 "spark": "CAST(DATE_FORMAT(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS VARCHAR(30))",
+                "tsql": "CONVERT(NVARCHAR, x, 121)",
             },
         )
         self.validate_all(
             "CONVERT(NVARCHAR(40), x, 121)",
             write={
                 "spark": "CAST(DATE_FORMAT(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS VARCHAR(40))",
+                "tsql": "CONVERT(NVARCHAR(40), x, 121)",
             },
         )
         self.validate_all(
             "CONVERT(NVARCHAR(MAX), x, 121)",
             write={
-                "spark": "DATE_FORMAT(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS')",
+                "spark": "CAST(DATE_FORMAT(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS STRING)",
+                "tsql": "CONVERT(NVARCHAR(MAX), x, 121)",
             },
         )
         self.validate_all(
             "CONVERT(DATE, x, 121)",
             write={
                 "spark": "TO_DATE(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS')",
+                "tsql": "CONVERT(DATE, x, 121)",
             },
         )
         self.validate_all(
             "CONVERT(DATETIME, x, 121)",
             write={
                 "spark": "TO_TIMESTAMP(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS')",
+                "tsql": "CONVERT(DATETIME2, x, 121)",
             },
         )
         self.validate_all(
             "CONVERT(DATETIME2, x, 121)",
             write={
                 "spark": "TO_TIMESTAMP(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS')",
+                "tsql": "CONVERT(DATETIME2, x, 121)",
             },
         )
         self.validate_all(
             "CONVERT(INT, x)",
             write={
                 "spark": "CAST(x AS INT)",
+                "tsql": "CONVERT(INTEGER, x)",
             },
         )
         self.validate_all(
             "CONVERT(INT, x, 121)",
             write={
                 "spark": "CAST(x AS INT)",
+                "tsql": "CONVERT(INTEGER, x, 121)",
             },
         )
         self.validate_all(
             "TRY_CONVERT(NVARCHAR, x, 121)",
             write={
                 "spark": "TRY_CAST(DATE_FORMAT(x, 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS VARCHAR(30))",
+                "tsql": "TRY_CONVERT(NVARCHAR, x, 121)",
             },
         )
         self.validate_all(
             "TRY_CONVERT(INT, x)",
             write={
                 "spark": "TRY_CAST(x AS INT)",
+                "tsql": "TRY_CONVERT(INTEGER, x)",
             },
         )
         self.validate_all(
             "TRY_CAST(x AS INT)",
             write={
                 "spark": "TRY_CAST(x AS INT)",
-            },
-        )
-        self.validate_all(
-            "CAST(x AS INT)",
-            write={
-                "spark": "CAST(x AS INT)",
+                "tsql": "TRY_CAST(x AS INTEGER)",
             },
         )
         self.validate_all(
@@ -1246,6 +1319,7 @@ WHERE
             write={
                 "mysql": "SELECT CAST(DATE_FORMAT(testdb.dbo.test.x, '%Y-%m-%d %T') AS CHAR(10)) AS y FROM testdb.dbo.test",
                 "spark": "SELECT CAST(DATE_FORMAT(testdb.dbo.test.x, 'yyyy-MM-dd HH:mm:ss') AS VARCHAR(10)) AS y FROM testdb.dbo.test",
+                "tsql": "SELECT CONVERT(VARCHAR(10), testdb.dbo.test.x, 120) AS y FROM testdb.dbo.test",
             },
         )
         self.validate_all(
@@ -1253,12 +1327,14 @@ WHERE
             write={
                 "mysql": "SELECT CAST(y.x AS CHAR(10)) AS z FROM testdb.dbo.test AS y",
                 "spark": "SELECT CAST(y.x AS VARCHAR(10)) AS z FROM testdb.dbo.test AS y",
+                "tsql": "SELECT CONVERT(VARCHAR(10), y.x) AS z FROM testdb.dbo.test AS y",
             },
         )
         self.validate_all(
             "SELECT CAST((SELECT x FROM y) AS VARCHAR) AS test",
             write={
                 "spark": "SELECT CAST((SELECT x FROM y) AS STRING) AS test",
+                "tsql": "SELECT CAST((SELECT x FROM y) AS VARCHAR) AS test",
             },
         )
 
@@ -1654,7 +1730,7 @@ FROM OPENJSON(@json) WITH (
     Date DATETIME2 '$.Order.Date',
     Customer VARCHAR(200) '$.AccountNumber',
     Quantity INTEGER '$.Item.Quantity',
-    [Order] VARCHAR(MAX) AS JSON
+    [Order] NVARCHAR(MAX) AS JSON
 )"""
             },
             pretty=True,

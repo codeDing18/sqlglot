@@ -33,16 +33,17 @@ FROM (
          WHERE object_pointstext IS NOT NULL
      );
 CREATE OR REPLACE TEMPORARY VIEW `latest_boo` AS
-SELECT
-  TRIM(SPLIT(`_q_1`.`points`, ':')[0]) AS `points_type`,
-  TRIM(SPLIT(`_q_1`.`points`, ':')[1]) AS `points_value`
-FROM (
+WITH `_q_1` AS (
   SELECT
     EXPLODE_OUTER(SPLIT(`boo`.`object_pointstext`, ',')) AS `points`
   FROM `boo` AS `boo`
   WHERE
     NOT `boo`.`object_pointstext` IS NULL
-) AS `_q_1`;
+)
+SELECT
+  TRIM(SPLIT(`_q_1`.`points`, ':')[0]) AS `points_type`,
+  TRIM(SPLIT(`_q_1`.`points`, ':')[1]) AS `points_value`
+FROM `_q_1` AS `_q_1`;
 
 # title: Union in CTE
 WITH cte AS (
@@ -820,7 +821,7 @@ SELECT
   `TOp_TeRmS`.`refresh_date` AS `day`,
   `TOp_TeRmS`.`term` AS `top_term`,
   `TOp_TeRmS`.`rank` AS `rank`
-FROM `bigquery-public-data`.`GooGle_tReNDs`.`TOp_TeRmS` AS `TOp_TeRmS`
+FROM `bigquery-public-data.GooGle_tReNDs.TOp_TeRmS` AS `TOp_TeRmS`
 WHERE
   `TOp_TeRmS`.`rank` = 1
   AND CAST(`TOp_TeRmS`.`refresh_date` AS DATE) >= DATE_SUB(CURRENT_DATE, INTERVAL 2 WEEK)

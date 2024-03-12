@@ -293,6 +293,7 @@ class TestRedshift(Validator):
         )
 
     def test_identity(self):
+        self.validate_identity("LISTAGG(DISTINCT foo, ', ')")
         self.validate_identity("CREATE MATERIALIZED VIEW orders AUTO REFRESH YES AS SELECT 1")
         self.validate_identity("SELECT DATEADD(DAY, 1, 'today')")
         self.validate_identity("SELECT * FROM #x")
@@ -515,6 +516,11 @@ FROM (
         )
 
     def test_column_unnesting(self):
+        self.validate_identity("SELECT c.*, o FROM bloo AS c, c.c_orders AS o")
+        self.validate_identity(
+            "SELECT c.*, o, l FROM bloo AS c, c.c_orders AS o, o.o_lineitems AS l"
+        )
+
         ast = parse_one("SELECT * FROM t.t JOIN t.c1 ON c1.c2 = t.c3", read="redshift")
         ast.args["from"].this.assert_is(exp.Table)
         ast.args["joins"][0].this.assert_is(exp.Table)
@@ -522,7 +528,7 @@ FROM (
 
         ast = parse_one("SELECT * FROM t AS t CROSS JOIN t.c1", read="redshift")
         ast.args["from"].this.assert_is(exp.Table)
-        ast.args["joins"][0].this.assert_is(exp.Column)
+        ast.args["joins"][0].this.assert_is(exp.Unnest)
         self.assertEqual(ast.sql("redshift"), "SELECT * FROM t AS t CROSS JOIN t.c1")
 
         ast = parse_one(
@@ -530,9 +536,9 @@ FROM (
         )
         joins = ast.args["joins"]
         ast.args["from"].this.assert_is(exp.Table)
-        joins[0].this.this.assert_is(exp.Column)
-        joins[1].this.this.assert_is(exp.Column)
-        joins[2].this.this.assert_is(exp.Dot)
+        joins[0].this.assert_is(exp.Unnest)
+        joins[1].this.assert_is(exp.Unnest)
+        joins[2].this.assert_is(exp.Unnest).expressions[0].assert_is(exp.Dot)
         self.assertEqual(
             ast.sql("redshift"), "SELECT * FROM x AS a, a.b AS c, c.d.e AS f, f.g.h.i.j.k AS l"
         )

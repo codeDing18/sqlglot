@@ -185,7 +185,6 @@ class MySQL(Dialect):
         KEYWORDS = {
             **tokens.Tokenizer.KEYWORDS,
             "CHARSET": TokenType.CHARACTER_SET,
-            "ENUM": TokenType.ENUM,
             "FORCE": TokenType.FORCE,
             "IGNORE": TokenType.IGNORE,
             "LOCK TABLES": TokenType.COMMAND,
@@ -391,6 +390,11 @@ class MySQL(Dialect):
             "WARNINGS": _show_parser("WARNINGS"),
         }
 
+        PROPERTY_PARSERS = {
+            **parser.Parser.PROPERTY_PARSERS,
+            "LOCK": lambda self: self._parse_property_assignment(exp.LockProperty),
+        }
+
         SET_PARSERS = {
             **parser.Parser.SET_PARSERS,
             "PERSIST": lambda self: self._parse_set_item_assignment("PERSIST"),
@@ -416,16 +420,11 @@ class MySQL(Dialect):
             "SPATIAL",
         }
 
-        PROFILE_TYPES = {
-            "ALL",
-            "BLOCK IO",
-            "CONTEXT SWITCHES",
-            "CPU",
-            "IPC",
-            "MEMORY",
-            "PAGE FAULTS",
-            "SOURCE",
-            "SWAPS",
+        PROFILE_TYPES: parser.OPTIONS_TYPE = {
+            **dict.fromkeys(("ALL", "CPU", "IPC", "MEMORY", "SOURCE", "SWAPS"), tuple()),
+            "BLOCK": ("IO",),
+            "CONTEXT": ("SWITCHES",),
+            "PAGE": ("FAULTS",),
         }
 
         TYPE_TOKENS = {
@@ -631,6 +630,7 @@ class MySQL(Dialect):
         JSON_TYPE_REQUIRED_FOR_EXTRACTION = True
         JSON_PATH_BRACKETED_KEY_SUPPORTED = False
         JSON_KEY_VALUE_PAIR_SEP = ","
+        SUPPORTS_TO_NUMBER = False
 
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,

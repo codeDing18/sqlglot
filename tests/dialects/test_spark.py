@@ -1,6 +1,7 @@
 from unittest import mock
 
 from sqlglot import exp, parse_one
+from sqlglot.dialects.dialect import Dialects
 from tests.dialects.test_dialect import Validator
 
 
@@ -16,6 +17,7 @@ class TestSpark(Validator):
         self.validate_identity(
             "CREATE TABLE foo (col STRING) CLUSTERED BY (col) SORTED BY (col) INTO 10 BUCKETS"
         )
+        self.validate_identity("TRUNCATE TABLE t1 PARTITION(age = 10, name = 'test', address)")
 
         self.validate_all(
             "CREATE TABLE db.example_table (col_a struct<struct_col_a:int, struct_col_b:string>)",
@@ -719,3 +721,16 @@ TBLPROPERTIES (
                 "presto": "SELECT col, pos, IF(_u_2.pos_2 = _u_3.pos_3, _u_3.col_2) AS col_2, IF(_u_2.pos_2 = _u_3.pos_3, _u_3.pos_3) AS pos_3 FROM _u CROSS JOIN UNNEST(SEQUENCE(1, GREATEST(CARDINALITY(ARRAY[2, 3])))) AS _u_2(pos_2) CROSS JOIN UNNEST(ARRAY[2, 3]) WITH ORDINALITY AS _u_3(col_2, pos_3) WHERE _u_2.pos_2 = _u_3.pos_3 OR (_u_2.pos_2 > CARDINALITY(ARRAY[2, 3]) AND _u_3.pos_3 = CARDINALITY(ARRAY[2, 3]))",
             },
         )
+
+    def test_strip_modifiers(self):
+        without_modifiers = "SELECT * FROM t"
+        with_modifiers = f"{without_modifiers} CLUSTER BY y DISTRIBUTE BY x SORT BY z"
+        query = self.parse_one(with_modifiers)
+
+        for dialect in Dialects:
+            with self.subTest(f"Transpiling query with CLUSTER/DISTRIBUTE/SORT BY to {dialect}"):
+                name = dialect.value
+                if name in ("", "databricks", "hive", "spark", "spark2"):
+                    self.assertEqual(query.sql(name), with_modifiers)
+                else:
+                    self.assertEqual(query.sql(name), without_modifiers)

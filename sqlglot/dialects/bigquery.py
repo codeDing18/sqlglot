@@ -42,7 +42,10 @@ def _derived_table_values_to_unnest(self: BigQuery.Generator, expression: exp.Va
     alias = expression.args.get("alias")
     for tup in expression.find_all(exp.Tuple):
         field_aliases = alias.columns if alias else (f"_c{i}" for i in range(len(tup.expressions)))
-        expressions = [exp.alias_(fld, name) for fld, name in zip(tup.expressions, field_aliases)]
+        expressions = [
+            exp.PropertyEQ(this=exp.to_identifier(name), expression=fld)
+            for name, fld in zip(field_aliases, tup.expressions)
+        ]
         structs.append(exp.Struct(expressions=expressions))
 
     return self.unnest_sql(exp.Unnest(expressions=[exp.array(*structs, copy=False)]))
@@ -111,6 +114,8 @@ def _alias_ordered_group(expression: exp.Expression) -> exp.Expression:
             }
 
             for grouped in group.expressions:
+                if grouped.is_int:
+                    continue
                 alias = aliases.get(grouped)
                 if alias:
                     grouped.replace(exp.column(alias))
@@ -226,8 +231,11 @@ class BigQuery(Dialect):
     # bigquery udfs are case sensitive
     NORMALIZE_FUNCTIONS = False
 
+    # https://cloud.google.com/bigquery/docs/reference/standard-sql/format-elements#format_elements_date_time
     TIME_MAPPING = {
         "%D": "%m/%d/%y",
+        "%E*S": "%S.%f",
+        "%E6S": "%S.%f",
     }
 
     ESCAPE_SEQUENCES = {
@@ -266,14 +274,20 @@ class BigQuery(Dialect):
             while isinstance(parent, exp.Dot):
                 parent = parent.parent
 
-            # In BigQuery, CTEs aren't case-sensitive, but table names are (by default, at least).
-            # The following check is essentially a heuristic to detect tables based on whether or
-            # not they're qualified. It also avoids normalizing UDFs, because they're case-sensitive.
-            if (
-                not isinstance(parent, exp.UserDefinedFunction)
-                and not (isinstance(parent, exp.Table) and parent.db)
-                and not expression.meta.get("is_table")
-            ):
+            # In BigQuery, CTEs are case-insensitive, but UDF and table names are case-sensitive
+            # by default. The following check uses a heuristic to detect tables based on whether
+            # they are qualified. This should generally be correct, because tables in BigQuery
+            # must be qualified with at least a dataset, unless @@dataset_id is set.
+            case_sensitive = (
+                isinstance(parent, exp.UserDefinedFunction)
+                or (
+                    isinstance(parent, exp.Table)
+                    and parent.db
+                    and (parent.meta.get("quoted_table") or not parent.meta.get("maybe_column"))
+                )
+                or expression.meta.get("is_table")
+            )
+            if not case_sensitive:
                 expression.set("this", expression.this.lower())
 
         return expression
@@ -302,6 +316,7 @@ class BigQuery(Dialect):
             "BYTES": TokenType.BINARY,
             "CURRENT_DATETIME": TokenType.CURRENT_DATETIME,
             "DECLARE": TokenType.COMMAND,
+            "ELSEIF": TokenType.COMMAND,
             "EXCEPTION": TokenType.COMMAND,
             "FLOAT64": TokenType.DOUBLE,
             "FOR SYSTEM_TIME": TokenType.TIMESTAMP_SNAPSHOT,
@@ -315,8 +330,8 @@ class BigQuery(Dialect):
 
     class Parser(parser.Parser):
         PREFIXED_PIVOT_COLUMNS = True
-
         LOG_DEFAULTS_TO_LN = True
+        SUPPORTS_IMPLICIT_UNNEST = True
 
         FUNCTIONS = {
             **parser.Parser.FUNCTIONS,
@@ -410,6 +425,7 @@ class BigQuery(Dialect):
 
         STATEMENT_PARSERS = {
             **parser.Parser.STATEMENT_PARSERS,
+            TokenType.ELSE: lambda self: self._parse_as_command(self._prev),
             TokenType.END: lambda self: self._parse_as_command(self._prev),
             TokenType.FOR: lambda self: self._parse_for_in(),
         }
@@ -433,8 +449,11 @@ class BigQuery(Dialect):
             if isinstance(this, exp.Identifier):
                 table_name = this.name
                 while self._match(TokenType.DASH, advance=False) and self._next:
-                    self._advance(2)
-                    table_name += f"-{self._prev.text}"
+                    text = ""
+                    while self._curr and self._curr.token_type != TokenType.DOT:
+                        self._advance()
+                        text += self._prev.text
+                    table_name += text
 
                 this = exp.Identifier(this=table_name, quoted=this.args.get("quoted"))
             elif isinstance(this, exp.Literal):
@@ -454,26 +473,38 @@ class BigQuery(Dialect):
                 schema=schema, is_db_reference=is_db_reference, wildcard=True
             )
 
-            if isinstance(table.this, exp.Identifier) and "." in table.name:
+            # proj-1.db.tbl -- `1.` is tokenized as a float so we need to unravel it here
+            if not table.catalog:
+                if table.db:
+                    parts = table.db.split(".")
+                    if len(parts) == 2 and not table.args["db"].quoted:
+                        table.set("catalog", exp.Identifier(this=parts[0]))
+                        table.set("db", exp.Identifier(this=parts[1]))
+                else:
+                    parts = table.name.split(".")
+                    if len(parts) == 2 and not table.this.quoted:
+                        table.set("db", exp.Identifier(this=parts[0]))
+                        table.set("this", exp.Identifier(this=parts[1]))
+
+            if any("." in p.name for p in table.parts):
                 catalog, db, this, *rest = (
-                    t.cast(t.Optional[exp.Expression], exp.to_identifier(x))
-                    for x in split_num_words(table.name, ".", 3)
+                    exp.to_identifier(p, quoted=True)
+                    for p in split_num_words(".".join(p.name for p in table.parts), ".", 3)
                 )
 
                 if rest and this:
-                    this = exp.Dot.build(t.cast(t.List[exp.Expression], [this, *rest]))
+                    this = exp.Dot.build([this, *rest])  # type: ignore
 
                 table = exp.Table(this=this, db=db, catalog=catalog)
+                table.meta["quoted_table"] = True
 
             return table
 
         @t.overload
-        def _parse_json_object(self, agg: Lit[False]) -> exp.JSONObject:
-            ...
+        def _parse_json_object(self, agg: Lit[False]) -> exp.JSONObject: ...
 
         @t.overload
-        def _parse_json_object(self, agg: Lit[True]) -> exp.JSONObjectAgg:
-            ...
+        def _parse_json_object(self, agg: Lit[True]) -> exp.JSONObjectAgg: ...
 
         def _parse_json_object(self, agg=False):
             json_object = super()._parse_json_object()
@@ -535,6 +566,7 @@ class BigQuery(Dialect):
         IGNORE_NULLS_IN_FUNC = True
         JSON_PATH_SINGLE_QUOTE_ESCAPE = True
         CAN_IMPLEMENT_ARRAY_ANY = True
+        SUPPORTS_TO_NUMBER = False
         NAMED_PLACEHOLDER_TOKEN = "@"
 
         TRANSFORMS = {
@@ -766,21 +798,24 @@ class BigQuery(Dialect):
             "within",
         }
 
+        def table_parts(self, expression: exp.Table) -> str:
+            # Depending on the context, `x.y` may not resolve to the same data source as `x`.`y`, so
+            # we need to make sure the correct quoting is used in each case.
+            #
+            # For example, if there is a CTE x that clashes with a schema name, then the former will
+            # return the table y in that schema, whereas the latter will return the CTE's y column:
+            #
+            # - WITH x AS (SELECT [1, 2] AS y) SELECT * FROM x, `x.y`   -> cross join
+            # - WITH x AS (SELECT [1, 2] AS y) SELECT * FROM x, `x`.`y` -> implicit unnest
+            if expression.meta.get("quoted_table"):
+                table_parts = ".".join(p.name for p in expression.parts)
+                return self.sql(exp.Identifier(this=table_parts, quoted=True))
+
+            return super().table_parts(expression)
+
         def timetostr_sql(self, expression: exp.TimeToStr) -> str:
             this = expression.this if isinstance(expression.this, exp.TsOrDsToDate) else expression
             return self.func("FORMAT_DATE", self.format_time(expression), this.this)
-
-        def struct_sql(self, expression: exp.Struct) -> str:
-            args = []
-            for expr in expression.expressions:
-                if isinstance(expr, self.KEY_VALUE_DEFINITIONS):
-                    arg = f"{self.sql(expr, 'expression')} AS {expr.this.name}"
-                else:
-                    arg = self.sql(expr)
-
-                args.append(arg)
-
-            return self.func("STRUCT", *args)
 
         def eq_sql(self, expression: exp.EQ) -> str:
             # Operands of = cannot be NULL in BigQuery
@@ -807,16 +842,16 @@ class BigQuery(Dialect):
 
         def array_sql(self, expression: exp.Array) -> str:
             first_arg = seq_get(expression.expressions, 0)
-            if isinstance(first_arg, exp.Subqueryable):
+            if isinstance(first_arg, exp.Query):
                 return f"ARRAY{self.wrap(self.sql(first_arg))}"
 
             return inline_array_sql(self, expression)
 
         def bracket_sql(self, expression: exp.Bracket) -> str:
-            this = self.sql(expression, "this")
+            this = expression.this
             expressions = expression.expressions
 
-            if len(expressions) == 1:
+            if len(expressions) == 1 and this and this.is_type(exp.DataType.Type.STRUCT):
                 arg = expressions[0]
                 if arg.type is None:
                     from sqlglot.optimizer.annotate_types import annotate_types
@@ -824,10 +859,10 @@ class BigQuery(Dialect):
                     arg = annotate_types(arg)
 
                 if arg.type and arg.type.this in exp.DataType.TEXT_TYPES:
-                    # BQ doesn't support bracket syntax with string values
-                    return f"{this}.{arg.name}"
+                    # BQ doesn't support bracket syntax with string values for structs
+                    return f"{self.sql(this)}.{arg.name}"
 
-            expressions_sql = ", ".join(self.sql(e) for e in expressions)
+            expressions_sql = self.expressions(expression, flat=True)
             offset = expression.args.get("offset")
 
             if offset == 0:
@@ -840,7 +875,7 @@ class BigQuery(Dialect):
             if expression.args.get("safe"):
                 expressions_sql = f"SAFE_{expressions_sql}"
 
-            return f"{this}[{expressions_sql}]"
+            return f"{self.sql(this)}[{expressions_sql}]"
 
         def in_unnest_op(self, expression: exp.Unnest) -> str:
             return self.sql(expression)

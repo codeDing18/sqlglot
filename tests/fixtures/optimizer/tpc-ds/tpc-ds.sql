@@ -1,6 +1,7 @@
 --------------------------------------
 -- TPC-DS 1
 --------------------------------------
+# execute: true
 WITH customer_total_return
      AS (SELECT sr_customer_sk     AS ctr_customer_sk,
                 sr_store_sk        AS ctr_store_sk,
@@ -263,6 +264,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 4
 --------------------------------------
+# execute: true
 WITH year_total
      AS (SELECT c_customer_id                       customer_id,
                 c_first_name                        customer_first_name,
@@ -860,6 +862,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 6
 --------------------------------------
+# execute: true
 SELECT a.ca_state state,
                Count(*)   cnt
 FROM   customer_address a,
@@ -1451,6 +1454,7 @@ WHERE
 --------------------------------------
 -- TPC-DS 10
 --------------------------------------
+# execute: true
 SELECT cd_gender,
                cd_marital_status,
                cd_education_status,
@@ -1625,6 +1629,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 11
 --------------------------------------
+# execute: true
 WITH year_total
      AS (SELECT c_customer_id                                customer_id,
                 c_first_name                                 customer_first_name
@@ -2446,6 +2451,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 17
 --------------------------------------
+# execute: true
 SELECT i_item_id,
                i_item_desc,
                s_state,
@@ -2635,6 +2641,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 19
 --------------------------------------
+# execute: true
 SELECT i_brand_id              brand_id,
                i_brand                 brand,
                i_manufact_id,
@@ -3733,6 +3740,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 31
 --------------------------------------
+# execute: true
 WITH ss
      AS (SELECT ca_county,
                 d_qoy,
@@ -4128,6 +4136,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 34
 --------------------------------------
+# execute: true
 SELECT c_last_name,
        c_first_name,
        c_salutation,
@@ -5329,6 +5338,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 46
 --------------------------------------
+# execute: true
 SELECT c_last_name,
                c_first_name,
                ca_city,
@@ -5915,6 +5925,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 50
 --------------------------------------
+# execute: true
 SELECT s_store_name,
                s_company_id,
                s_street_number,
@@ -8026,6 +8037,7 @@ ORDER BY
 --------------------------------------
 -- TPC-DS 65
 --------------------------------------
+# execute: true
 SELECT s_store_name,
                i_item_desc,
                sc.revenue,
@@ -8127,6 +8139,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 66
 --------------------------------------
+# execute: true
 SELECT w_warehouse_name,
                w_warehouse_sq_ft,
                w_city,
@@ -9033,6 +9046,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 68
 --------------------------------------
+# execute: true
 SELECT c_last_name,
                c_first_name,
                ca_city,
@@ -9575,6 +9589,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 73
 --------------------------------------
+# execute: true
 SELECT c_last_name,
        c_first_name,
        c_salutation,
@@ -9662,6 +9677,7 @@ ORDER BY
 --------------------------------------
 -- TPC-DS 74
 --------------------------------------
+# execute: true
 WITH year_total
      AS (SELECT c_customer_id    customer_id,
                 c_first_name     customer_first_name,
@@ -9821,6 +9837,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 75
 --------------------------------------
+# execute: true
 WITH all_sales
      AS (SELECT d_year,
                 i_brand_id,
@@ -10025,6 +10042,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 76
 --------------------------------------
+# execute: true
 SELECT channel,
                col_name,
                d_year,
@@ -10402,6 +10420,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 78
 --------------------------------------
+# execute: true
 WITH ws
      AS (SELECT d_year                 AS ws_sold_year,
                 ws_item_sk,
@@ -10904,6 +10923,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 81
 --------------------------------------
+# execute: true
 WITH customer_total_return
      AS (SELECT cr_returning_customer_sk   AS ctr_customer_sk,
                 ca_state                   AS ctr_state,
@@ -12407,6 +12427,7 @@ LIMIT 100;
 --------------------------------------
 -- TPC-DS 97
 --------------------------------------
+# execute: true
 WITH ssci
      AS (SELECT ss_customer_sk customer_sk,
                 ss_item_sk     item_sk

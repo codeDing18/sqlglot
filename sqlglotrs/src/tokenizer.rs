@@ -178,15 +178,6 @@ impl<'a> TokenizerState<'a> {
         Ok(())
     }
 
-    fn peek(&self, i: usize) -> Result<char, TokenizerError> {
-        let index = self.current + i;
-        if index < self.size {
-            self.char_at(index)
-        } else {
-            Ok('\0')
-        }
-    }
-
     fn chars(&self, size: usize) -> String {
         let start = self.current - 1;
         let end = start + size;
@@ -469,13 +460,8 @@ impl<'a> TokenizerState<'a> {
             if self.peek_char.is_digit(10) {
                 self.advance(1)?;
             } else if self.peek_char == '.' && !decimal {
-                let after = self.peek(1)?;
-                if after.is_digit(10) || !after.is_alphabetic() {
-                    decimal = true;
-                    self.advance(1)?;
-                } else {
-                    return self.add(self.token_types.var, None);
-                }
+                decimal = true;
+                self.advance(1)?;
             } else if (self.peek_char == '-' || self.peek_char == '+') && scientific == 1 {
                 scientific += 1;
                 self.advance(1)?;

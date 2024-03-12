@@ -40,6 +40,7 @@ WHERE
   )""",
         )
 
+        self.validate_identity("TO_DECIMAL(expr, fmt, precision, scale)")
         self.validate_identity("ALTER TABLE authors ADD CONSTRAINT c1 UNIQUE (id, email)")
         self.validate_identity("RM @parquet_stage", check_command_warning=True)
         self.validate_identity("REMOVE @parquet_stage", check_command_warning=True)
@@ -86,8 +87,13 @@ WHERE
             "SELECT a FROM test PIVOT(SUM(x) FOR y IN ('z', 'q')) AS x TABLESAMPLE (0.1)"
         )
         self.validate_identity(
-            "value:values::string",
-            "CAST(GET_PATH(value, 'values') AS TEXT)",
+            "SELECT a:from::STRING, a:from || ' test' ",
+            "SELECT CAST(GET_PATH(a, 'from') AS TEXT), GET_PATH(a, 'from') || ' test'",
+        )
+        self.validate_identity("x:from", "GET_PATH(x, 'from')")
+        self.validate_identity(
+            "value:values::string::int",
+            "CAST(CAST(GET_PATH(value, 'values') AS TEXT) AS INT)",
         )
         self.validate_identity(
             """SELECT GET_PATH(PARSE_JSON('{"y": [{"z": 1}]}'), 'y[0]:z')""",
@@ -131,7 +137,11 @@ WHERE
         )
         self.validate_identity(
             "v:attr[0]:name",
-            "GET_PATH(GET_PATH(v, 'attr[0]'), 'name')",
+            "GET_PATH(v, 'attr[0].name')",
+        )
+        self.validate_identity(
+            "a.x:from.b:c.d::int",
+            "CAST(GET_PATH(a.x, 'from.b.c.d') AS INT)",
         )
         self.validate_identity(
             """SELECT PARSE_JSON('{"food":{"fruit":"banana"}}'):food.fruit::VARCHAR""",
@@ -372,15 +382,17 @@ WHERE
             write={"snowflake": "SELECT * FROM (VALUES (0)) AS foo(bar)"},
         )
         self.validate_all(
-            "OBJECT_CONSTRUCT(a, b, c, d)",
+            "OBJECT_CONSTRUCT('a', b, 'c', d)",
             read={
-                "": "STRUCT(a as b, c as d)",
+                "": "STRUCT(b as a, d as c)",
             },
             write={
                 "duckdb": "{'a': b, 'c': d}",
-                "snowflake": "OBJECT_CONSTRUCT(a, b, c, d)",
+                "snowflake": "OBJECT_CONSTRUCT('a', b, 'c', d)",
             },
         )
+        self.validate_identity("OBJECT_CONSTRUCT(a, b, c, d)")
+
         self.validate_all(
             "SELECT i, p, o FROM qt QUALIFY ROW_NUMBER() OVER (PARTITION BY p ORDER BY o) = 1",
             write={
@@ -557,9 +569,9 @@ WHERE
         self.validate_all(
             '''SELECT PARSE_JSON('{"a": {"b c": "foo"}}'):a:"b c"''',
             write={
-                "duckdb": """SELECT JSON('{"a": {"b c": "foo"}}') -> '$.a' -> '$."b c"'""",
-                "mysql": """SELECT JSON_EXTRACT(JSON_EXTRACT('{"a": {"b c": "foo"}}', '$.a'), '$."b c"')""",
-                "snowflake": """SELECT GET_PATH(GET_PATH(PARSE_JSON('{"a": {"b c": "foo"}}'), 'a'), '["b c"]')""",
+                "duckdb": """SELECT JSON('{"a": {"b c": "foo"}}') -> '$.a."b c"'""",
+                "mysql": """SELECT JSON_EXTRACT('{"a": {"b c": "foo"}}', '$.a."b c"')""",
+                "snowflake": """SELECT GET_PATH(PARSE_JSON('{"a": {"b c": "foo"}}'), 'a["b c"]')""",
             },
         )
         self.validate_all(
@@ -664,9 +676,13 @@ WHERE
         )
         self.validate_all(
             "ARRAY_TO_STRING(x, '')",
+            read={
+                "duckdb": "ARRAY_TO_STRING(x, '')",
+            },
             write={
                 "spark": "ARRAY_JOIN(x, '')",
                 "snowflake": "ARRAY_TO_STRING(x, '')",
+                "duckdb": "ARRAY_TO_STRING(x, '')",
             },
         )
         self.validate_all(

@@ -702,6 +702,10 @@ class TestExecutor(unittest.TestCase):
             ("ARRAY_JOIN(['hello', null ,'world'], ' ', ',')", "hello , world"),
             ("ARRAY_JOIN(['', null ,'world'], ' ', ',')", " , world"),
             ("STRUCT('foo', 'bar', null, null)", {"foo": "bar"}),
+            ("ROUND(1.5)", 2),
+            ("ROUND(1.2)", 1),
+            ("ROUND(1.2345, 2)", 1.23),
+            ("ROUND(NULL)", None),
         ]:
             with self.subTest(sql):
                 result = execute(f"SELECT {sql}")
@@ -807,7 +811,7 @@ class TestExecutor(unittest.TestCase):
                 self.assertEqual(result.columns, columns)
                 self.assertEqual(result.rows, expected)
 
-    def test_dict_values(self):
+    def test_nested_values(self):
         tables = {"foo": [{"raw": {"name": "Hello, World", "a": [{"b": 1}]}}]}
 
         result = execute("SELECT raw:name AS name FROM foo", read="snowflake", tables=tables)
@@ -837,3 +841,9 @@ class TestExecutor(unittest.TestCase):
 
         self.assertEqual(result.columns, ("flavor",))
         self.assertEqual(result.rows, [("cherry",), ("lime",), ("apple",)])
+
+        tables = {"t": [{"x": [1, 2, 3]}]}
+
+        result = execute("SELECT x FROM t", dialect="duckdb", tables=tables)
+        self.assertEqual(result.columns, ("x",))
+        self.assertEqual(result.rows, [([1, 2, 3],)])
