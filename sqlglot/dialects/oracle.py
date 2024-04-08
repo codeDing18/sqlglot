@@ -29,6 +29,9 @@ def _build_timetostr_or_tochar(args: t.List) -> exp.TimeToStr | exp.ToChar:
         if this.is_type(*exp.DataType.TEMPORAL_TYPES):
             return build_formatted_time(exp.TimeToStr, "oracle", default=True)(args)
 
+    if len(args) == 2:
+        return build_formatted_time(exp.TimeToStr, "oracle", default=True)(args)
+
     return exp.ToChar.from_arg_list(args)
 
 
