@@ -25,6 +25,48 @@ class Doris(MySQL):
     DATEINT_FORMAT = "'yyyyMMdd'"
     TIME_FORMAT = "'yyyy-MM-dd HH:mm:ss'"
 
+    # 如果source方言经过映射后变成了%-H，则这个可以将%-H变成H
+    TIME_MAPPING = {
+        "H": "%-H",
+        "m": "%-M",
+        "Y": "%Y",
+        "d": "%-d",
+        "%T": "%H:%M:%S",
+    }
+
+    # TIME_MAPPING = {
+    #     "y": "%Y",
+    #     "Y": "%Y",
+    #     "YYYY": "%Y",
+    #     "yyyy": "%Y",
+    #     "YY": "%y",
+    #     "yy": "%y",
+    #     "MMMM": "%B",
+    #     "MMM": "%b",
+    #     "MM": "%m",
+    #     "M": "%-m",
+    #     "dd": "%d",
+    #     "d": "%-d",
+    #     "HH": "%H",
+    #     "H": "%-H",
+    #     "hh": "%I",
+    #     "h": "%-I",
+    #     "mm": "%M",
+    #     "m": "%-M",
+    #     "ss": "%S",
+    #     "s": "%-S",
+    #     "SSSSSS": "%f",
+    #     "a": "%p",
+    #     "DD": "%j",
+    #     "D": "%-j",
+    #     "E": "%a",
+    #     "EE": "%a",
+    #     "EEE": "%a",
+    #     "EEEE": "%A",
+    #     "z": "%Z",
+    #     "Z": "%z",
+    # }
+
     class Parser(MySQL.Parser):
         FUNCTIONS = {
             **MySQL.Parser.FUNCTIONS,
