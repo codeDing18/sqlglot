@@ -54,6 +54,7 @@ class Doris(MySQL):
 
         TRANSFORMS = {
             **MySQL.Generator.TRANSFORMS,
+            exp.FromTimestamp: rename_func("DATE_FORMAT"),
             exp.AddMonths: rename_func("MONTHS_ADD"),
             exp.ApproxDistinct: approx_count_distinct_sql,
             exp.ArgMax: rename_func("MAX_BY"),

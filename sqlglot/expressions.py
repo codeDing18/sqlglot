@@ -6580,6 +6580,8 @@ class Month(Func):
 class AddMonths(Func):
     arg_types = {"this": True, "expression": True}
 
+class FromTimestamp(Func):
+    arg_types = {"this": True, "expression": True}
 
 class Nvl2(Func):
     arg_types = {"this": True, "true": True, "false": False}
