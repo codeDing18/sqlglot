@@ -4346,6 +4346,15 @@ class Generator(metaclass=_Generator):
                 agg_func_sql = self.sql(agg_func, comment=False)[:-1] + f" {text})"
                 return self.maybe_comment(agg_func_sql, comments=agg_func.comments)
 
+        from sqlglot.dialects.doris import Doris
+        if isinstance(self.dialect, Doris):
+            original_sql = self.sql(expression, 'this')
+            # 在 ')' 前插入 ', 1'
+            # 因为last_value first_value没有ignore null的也会走Doris的last_value转换逻辑
+            # 所以只能在这里修改
+            modified_sql = original_sql.replace(')', ', 1)')
+            return modified_sql
+
         return f"{self.sql(expression, 'this')} {text}"
 
     def _replace_line_breaks(self, string: str) -> str:

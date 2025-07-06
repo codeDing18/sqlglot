@@ -19,6 +19,11 @@ def _lag_lead_sql(self, expression: exp.Lag | exp.Lead) -> str:
         expression.args.get("default") or exp.null(),
     )
 
+def _last_value(self: Doris.Generator, expression: exp.LastValue) -> str:
+    # 这里处理的last_value不管有没ignore null的
+    # 有ignore null的在generator.py的_embed_ignore_nulls方法中处理了
+    return self.func("Last_Value", expression.this)
+
 
 class Doris(MySQL):
     DATE_FORMAT = "'yyyy-MM-dd'"
@@ -97,6 +102,7 @@ class Doris(MySQL):
         TRANSFORMS = {
             **MySQL.Generator.TRANSFORMS,
             exp.FromTimestamp: rename_func("DATE_FORMAT"),
+            exp.LastValue: _last_value,
             exp.AddMonths: rename_func("MONTHS_ADD"),
             exp.ApproxDistinct: approx_count_distinct_sql,
             exp.ArgMax: rename_func("MAX_BY"),
