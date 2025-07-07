@@ -24,6 +24,20 @@ def _last_value(self: Doris.Generator, expression: exp.LastValue) -> str:
     # 有ignore null的在generator.py的_embed_ignore_nulls方法中处理了
     return self.func("Last_Value", expression.this)
 
+def _build_from_unixtime(self: Doris.Generator, expression: exp.LastValue) -> str:
+    format = time_format("doris")(self, expression)
+    modified_format = format.replace('%M', '%m')
+    return self.func("FROM_UNIXTIME", expression.this, modified_format)
+
+def _build_from_strtounix(self: Doris.Generator, expression: exp.LastValue) -> str:
+    format = self.format_time(expression)
+    modified_format = format.replace('%M', '%m')
+    return self.func("UNIX_TIMESTAMP", expression.this, modified_format)
+
+def _build_from_fromtimestamp(self: Doris.Generator, expression: exp.LastValue) -> str:
+    format = self.format_time(expression)
+    modified_format = format.replace('%M', '%m')
+    return self.func("DATE_FORMAT", expression.this, modified_format)
 
 class Doris(MySQL):
     DATE_FORMAT = "'yyyy-MM-dd'"
@@ -38,39 +52,6 @@ class Doris(MySQL):
         "%d": "%%-d",
         "%T": "%H:%M:%S",
     }
-
-    # TIME_MAPPING = {
-    #     "y": "%Y",
-    #     "Y": "%Y",
-    #     "YYYY": "%Y",
-    #     "yyyy": "%Y",
-    #     "YY": "%y",
-    #     "yy": "%y",
-    #     "MMMM": "%B",
-    #     "MMM": "%b",
-    #     "MM": "%m",
-    #     "M": "%-m",
-    #     "dd": "%d",
-    #     "d": "%-d",
-    #     "HH": "%H",
-    #     "H": "%-H",
-    #     "hh": "%I",
-    #     "h": "%-I",
-    #     "mm": "%M",
-    #     "m": "%-M",
-    #     "ss": "%S",
-    #     "s": "%-S",
-    #     "SSSSSS": "%f",
-    #     "a": "%p",
-    #     "DD": "%j",
-    #     "D": "%-j",
-    #     "E": "%a",
-    #     "EE": "%a",
-    #     "EEE": "%a",
-    #     "EEEE": "%A",
-    #     "z": "%Z",
-    #     "Z": "%z",
-    # }
 
     class Parser(MySQL.Parser):
         FUNCTIONS = {
@@ -102,6 +83,7 @@ class Doris(MySQL):
         TRANSFORMS = {
             **MySQL.Generator.TRANSFORMS,
             exp.FromTimestamp: rename_func("DATE_FORMAT"),
+            # exp.FromTimestamp: _build_from_fromtimestamp,
             exp.LastValue: _last_value,
             exp.AddMonths: rename_func("MONTHS_ADD"),
             exp.ApproxDistinct: approx_count_distinct_sql,
@@ -123,15 +105,17 @@ class Doris(MySQL):
             exp.RegexpSplit: rename_func("SPLIT_BY_STRING"),
             exp.Split: rename_func("SPLIT_BY_STRING"),
             exp.StringToArray: rename_func("SPLIT_BY_STRING"),
-            exp.StrToUnix: lambda self, e: self.func("UNIX_TIMESTAMP", e.this, self.format_time(e)),
+            # exp.StrToUnix: lambda self, e: self.func("UNIX_TIMESTAMP", e.this, self.format_time(e)),
+            exp.StrToUnix: _build_from_strtounix,
             exp.TimeStrToDate: rename_func("TO_DATE"),
             exp.TsOrDsAdd: lambda self, e: self.func("DATE_ADD", e.this, e.expression),
             exp.TsOrDsToDate: lambda self, e: self.func("TO_DATE", e.this),
             exp.TimeToUnix: rename_func("UNIX_TIMESTAMP"),
             exp.TimestampTrunc: lambda self, e: self.func("DATE_TRUNC", e.this, unit_to_str(e)),
-            exp.UnixToStr: lambda self, e: self.func(
-                "FROM_UNIXTIME", e.this, time_format("doris")(self, e)
-            ),
+            # exp.UnixToStr: lambda self, e: self.func(
+            #     "FROM_UNIXTIME", e.this, time_format("doris")(self, e)
+            # ),
+            exp.UnixToStr: _build_from_unixtime,
             exp.UnixToTime: rename_func("FROM_UNIXTIME"),
         }
 
