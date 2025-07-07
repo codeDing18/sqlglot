@@ -200,6 +200,44 @@ def _build_to_date(args: t.List) -> exp.TsOrDsToDate:
     expr.set("safe", True)
     return expr
 
+def _build_date_sub(args: t.List) -> exp.DateSub:
+    this = seq_get(args, 0)
+    expression=seq_get(args, 1)
+    if isinstance(expression, exp.Interval):
+        num=expression.this
+        unit=expression.unit
+        return exp.DateSub(
+            this=this,
+            expression=num,
+            unit=unit,
+        )
+
+    unit=exp.Literal.string("DAY")
+    return exp.DateSub(
+        this=this,
+        expression=expression,
+        unit=unit,
+    )
+
+def _build_date_add(args: t.List) -> exp.DateAdd:
+    this = seq_get(args, 0)
+    expression=seq_get(args, 1)
+    if isinstance(expression, exp.Interval):
+        num=expression.this
+        unit=expression.unit
+        return exp.DateAdd(
+            this=this,
+            expression=num,
+            unit=unit,
+        )
+
+    unit=exp.Literal.string("DAY")
+    return exp.DateAdd(
+        this=this,
+        expression=expression,
+        unit=unit,
+    )
+
 
 class Hive(Dialect):
     ALIAS_POST_TABLESAMPLE = True
@@ -313,20 +351,14 @@ class Hive(Dialect):
             "BASE64": exp.ToBase64.from_arg_list,
             "COLLECT_LIST": lambda args: exp.ArrayAgg(this=seq_get(args, 0), nulls_excluded=True),
             "COLLECT_SET": exp.ArrayUniqueAgg.from_arg_list,
-            "DATE_ADD": lambda args: exp.TsOrDsAdd(
-                this=seq_get(args, 0), expression=seq_get(args, 1), unit=exp.Literal.string("DAY")
-            ),
+            "DATE_ADD": _build_date_add,
             "DATE_FORMAT": lambda args: build_formatted_time(exp.TimeToStr, "hive")(
                 [
                     exp.TimeStrToTime(this=seq_get(args, 0)),
                     seq_get(args, 1),
                 ]
             ),
-            "DATE_SUB": lambda args: exp.TsOrDsAdd(
-                this=seq_get(args, 0),
-                expression=exp.Mul(this=seq_get(args, 1), expression=exp.Literal.number(-1)),
-                unit=exp.Literal.string("DAY"),
-            ),
+            "DATE_SUB": _build_date_sub,
             "DATEDIFF": lambda args: exp.DateDiff(
                 this=exp.TsOrDsToDate(this=seq_get(args, 0)),
                 expression=exp.TsOrDsToDate(this=seq_get(args, 1)),
