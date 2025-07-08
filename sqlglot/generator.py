@@ -4351,8 +4351,16 @@ class Generator(metaclass=_Generator):
             original_sql = self.sql(expression, 'this')
             # 在 ')' 前插入 ', 1'
             # 因为last_value first_value没有ignore null的也会走Doris的last_value转换逻辑
-            # 所以只能在这里修改
-            modified_sql = original_sql.replace(')', ', 1)')
+            # 所以只能在这里修改，注意这里可能有多个)，我们只能在最右边的一个)改成, 1)
+
+            # 找到最后一个右括号的位置
+            last_parenthesis_index = original_sql.rfind(')')
+
+            # 如果找到了右括号，则进行替换
+            if last_parenthesis_index != -1:
+                modified_sql = (original_sql[:last_parenthesis_index] + ', 1' + original_sql[last_parenthesis_index:])
+            else:
+                modified_sql = original_sql  # 没有右括号时不做修改
             return modified_sql
 
         return f"{self.sql(expression, 'this')} {text}"
