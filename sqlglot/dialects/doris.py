@@ -34,23 +34,25 @@ def _build_from_strtounix(self: Doris.Generator, expression: exp.LastValue) -> s
     modified_format = format.replace('%M', '%m')
     return self.func("UNIX_TIMESTAMP", expression.this, modified_format)
 
-def _build_from_fromtimestamp(self: Doris.Generator, expression: exp.LastValue) -> str:
-    format = self.format_time(expression)
-    modified_format = format.replace('%M', '%m')
-    return self.func("DATE_FORMAT", expression.this, modified_format)
-
 class Doris(MySQL):
     DATE_FORMAT = "'yyyy-MM-dd'"
     DATEINT_FORMAT = "'yyyyMMdd'"
     TIME_FORMAT = "'yyyy-MM-dd HH:mm:ss'"
 
     # 如果source方言经过映射后变成了%-H，则这个可以将%-H变成H
+    # 貌似如果这个是转换的目标方言，这个映射就是从右往左
+    # 如果是读取方言，就是从左到右
     TIME_MAPPING = {
+        "%i": "%M",
         "%H": "%%-H",
         "%m": "%%-M",
         "%Y": "%%Y",
         "%d": "%%-d",
         "%T": "%H:%M:%S",
+        "-%m": "/%-m",
+        "-%d": "/%-d",
+        " %H": "%-H",
+        "%s": "%S",
     }
 
     class Parser(MySQL.Parser):
@@ -83,7 +85,6 @@ class Doris(MySQL):
         TRANSFORMS = {
             **MySQL.Generator.TRANSFORMS,
             exp.FromTimestamp: rename_func("DATE_FORMAT"),
-            # exp.FromTimestamp: _build_from_fromtimestamp,
             exp.LastValue: _last_value,
             exp.AddMonths: rename_func("MONTHS_ADD"),
             exp.ApproxDistinct: approx_count_distinct_sql,
