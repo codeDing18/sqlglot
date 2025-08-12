@@ -6108,6 +6108,9 @@ class FeaturesAtTime(Func):
 class ToBase64(Func):
     pass
 
+class BASE64ENCODE(Func):
+    pass
+
 
 # https://trino.io/docs/current/functions/datetime.html#from_iso8601_timestamp
 class FromISO8601Timestamp(Func):
