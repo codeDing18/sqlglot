@@ -6111,6 +6111,9 @@ class ToBase64(Func):
 class BASE64ENCODE(Func):
     pass
 
+class BTRIM(Func):
+    pass
+
 
 # https://trino.io/docs/current/functions/datetime.html#from_iso8601_timestamp
 class FromISO8601Timestamp(Func):

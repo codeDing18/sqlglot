@@ -349,6 +349,7 @@ class Hive(Dialect):
             **parser.Parser.FUNCTIONS,
             "ASCII": exp.Unicode.from_arg_list,
             "BASE64": exp.ToBase64.from_arg_list,
+            "BTRIM": exp.BTRIM.from_arg_list,
             "BASE64ENCODE": exp.BASE64ENCODE.from_arg_list,
             "COLLECT_LIST": lambda args: exp.ArrayAgg(this=seq_get(args, 0), nulls_excluded=True),
             "COLLECT_SET": exp.ArrayUniqueAgg.from_arg_list,
