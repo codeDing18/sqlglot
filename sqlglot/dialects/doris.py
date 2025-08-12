@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from sqlglot import exp
+import typing as t
 from sqlglot.dialects.dialect import (
     approx_count_distinct_sql,
     build_timestamp_trunc,
@@ -33,6 +34,37 @@ def _build_from_strtounix(self: Doris.Generator, expression: exp.LastValue) -> s
     format = self.format_time(expression)
     modified_format = format.replace('%M', '%m')
     return self.func("UNIX_TIMESTAMP", expression.this, modified_format)
+
+def date_trunc_unit_to_str(expression: exp.Expression, default: str = "DAY") -> t.Optional[exp.Expression]:
+    unit = expression.args.get("unit")
+
+    if isinstance(unit, exp.Placeholder):
+        return unit
+    if unit:
+        if unit.name == "SYYYY" or unit.name == "YYYY" or unit.name == "YEAR"\
+                or unit.name == "SYEAR" or unit.name == "YYY" or unit.name == "YY" or unit.name == "Y":
+            return exp.Literal.string("year")
+        elif unit.name == "Q":
+            return exp.Literal.string("quarter")
+        elif unit.name == "MONTH" or unit.name == "MON" or unit.name == "MM" or unit.name == "RM":
+            return exp.Literal.string("month")
+        elif (unit.name == "DDD" or unit.name == "DD" or unit.name == "J"
+              or unit.name == "DAY" or unit.name == "DY" or unit.name == "D"):
+            return exp.Literal.string("day")
+        elif unit.name == "MI":
+            return exp.Literal.string("minute")
+        elif unit.name == "DDD" or unit.name == "DD" or unit.name == "J":
+            return exp.Literal.string("day")
+        elif unit.name == "HH" or unit.name == "HH12" or unit.name == "HH24":
+            return exp.Literal.string("hour")
+        elif unit.name == "DDD" or unit.name == "DD" or unit.name == "J":
+            return exp.Literal.string("day")
+        elif unit.name == "WW" or unit.name == "W":
+            return exp.Literal.string("week")
+        else:
+            return exp.Literal.string(unit.name)
+    return exp.Literal.string(default) if default else None
+
 
 class Doris(MySQL):
     DATE_FORMAT = "'yyyy-MM-dd'"
@@ -113,7 +145,7 @@ class Doris(MySQL):
             exp.TsOrDsAdd: lambda self, e: self.func("DATE_ADD", e.this, e.expression),
             exp.TsOrDsToDate: lambda self, e: self.func("TO_DATE", e.this),
             exp.TimeToUnix: rename_func("UNIX_TIMESTAMP"),
-            exp.TimestampTrunc: lambda self, e: self.func("DATE_TRUNC", e.this, unit_to_str(e)),
+            exp.TimestampTrunc: lambda self, e: self.func("DATE_TRUNC", e.this, date_trunc_unit_to_str(e)),
             # exp.UnixToStr: lambda self, e: self.func(
             #     "FROM_UNIXTIME", e.this, time_format("doris")(self, e)
             # ),
