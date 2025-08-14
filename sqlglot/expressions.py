@@ -6114,6 +6114,12 @@ class BASE64ENCODE(Func):
 class BASE64DECODE(Func):
     pass
 
+class MonthsBetween(Func):
+    arg_types = {
+        "first": True,
+        "second": True,
+    }
+
 class BTRIM(Func):
     pass
 

@@ -118,6 +118,7 @@ class Doris(MySQL):
             **MySQL.Generator.TRANSFORMS,
             exp.BASE64ENCODE: rename_func("TO_BASE64"),
             exp.BASE64DECODE: rename_func("FROM_BASE64"),
+            exp.MonthsBetween: rename_func("MONTHS_DIFF"),
             exp.BTRIM: rename_func("TRIM_IN"),
             exp.Unicode: rename_func("ASCII"),
             exp.FromTimestamp: rename_func("DATE_FORMAT"),

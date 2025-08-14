@@ -352,6 +352,7 @@ class Hive(Dialect):
             "BTRIM": exp.BTRIM.from_arg_list,
             "BASE64ENCODE": exp.BASE64ENCODE.from_arg_list,
             "BASE64DECODE": exp.BASE64DECODE.from_arg_list,
+            "MONTHS_BETWEEN": exp.MonthsBetween.from_arg_list,
             "COLLECT_LIST": lambda args: exp.ArrayAgg(this=seq_get(args, 0), nulls_excluded=True),
             "COLLECT_SET": exp.ArrayUniqueAgg.from_arg_list,
             "DATE_ADD": _build_date_add,
