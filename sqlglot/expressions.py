@@ -6111,6 +6111,9 @@ class ToBase64(Func):
 class BASE64ENCODE(Func):
     pass
 
+class BASE64DECODE(Func):
+    pass
+
 class BTRIM(Func):
     pass
 
