@@ -35,6 +35,23 @@ def _build_from_strtounix(self: Doris.Generator, expression: exp.LastValue) -> s
     modified_format = format.replace('%M', '%m')
     return self.func("UNIX_TIMESTAMP", expression.this, modified_format)
 
+def _build_from_JSONExtractScalar(self: Doris.Generator, expression: exp.LastValue) -> str:
+    type = expression.parent.args.get("to").this.name
+
+    if type == "INT":
+        return self.func("JSON_EXTRACT_INT", expression.this, expression.expression)
+    elif type == "BIGINT":
+        return self.func("JSON_EXTRACT_BIGINT", expression.this, expression.expression)
+    elif type == "BOOLEAN":
+        return self.func("JSON_EXTRACT_BOOL", expression.this, expression.expression)
+    elif type == "DECIMAL":
+        return self.func("JSON_EXTRACT_DOUBLE", expression.this, expression.expression)
+    elif type == "NULL":
+        return self.func("JSON_EXTRACT_ISNULL", expression.this, expression.expression)
+
+    return self.func("JSON_EXTRACT_STRING", expression.this, expression.expression)
+
+
 def date_trunc_unit_to_str(expression: exp.Expression, default: str = "DAY") -> t.Optional[exp.Expression]:
     unit = expression.args.get("unit")
 
@@ -135,7 +152,8 @@ class Doris(MySQL):
             exp.GroupConcat: lambda self, e: self.func(
                 "GROUP_CONCAT", e.this, e.args.get("separator") or exp.Literal.string(",")
             ),
-            exp.JSONExtractScalar: lambda self, e: self.func("JSON_EXTRACT", e.this, e.expression),
+            # exp.JSONExtractScalar: lambda self, e: self.func("JSON_EXTRACT", e.this, e.expression),
+            exp.JSONExtractScalar: _build_from_JSONExtractScalar,
             exp.Lag: _lag_lead_sql,
             exp.Lead: _lag_lead_sql,
             exp.Map: rename_func("ARRAY_MAP"),
