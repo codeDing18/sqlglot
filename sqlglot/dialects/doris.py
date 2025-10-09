@@ -40,6 +40,8 @@ def _build_from_JSONExtractScalar(self: Doris.Generator, expression: exp.LastVal
 
     if type == "INT":
         return self.func("JSON_EXTRACT_INT", expression.this, expression.expression)
+    elif type == "DOUBLE":
+        return self.func("JSON_EXTRACT_DOUBLE", expression.this, expression.expression)
     elif type == "BIGINT":
         return self.func("JSON_EXTRACT_BIGINT", expression.this, expression.expression)
     elif type == "BOOLEAN":

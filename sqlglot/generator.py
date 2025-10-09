@@ -3328,6 +3328,11 @@ class Generator(metaclass=_Generator):
         action = f" {action}" if action else ""
         default = self.sql(expression, "default")
         default = f" DEFAULT {default} ON CONVERSION ERROR" if default else ""
+        # return f"{safe_prefix or ''}CAST({self.sql(expression, 'this')} AS{to_sql}{default}{format_sql}{action})"
+        if isinstance(expression.this, exp.JSONExtractScalar):
+            if to_sql == " INT" or to_sql == " BIGINT":
+                return f"{safe_prefix or ''}{self.sql(expression, 'this')}"
+
         return f"{safe_prefix or ''}CAST({self.sql(expression, 'this')} AS{to_sql}{default}{format_sql}{action})"
 
     def currentdate_sql(self, expression: exp.CurrentDate) -> str:
