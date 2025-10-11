@@ -36,20 +36,20 @@ def _build_from_strtounix(self: Doris.Generator, expression: exp.LastValue) -> s
     return self.func("UNIX_TIMESTAMP", expression.this, modified_format)
 
 def _build_from_JSONExtractScalar(self: Doris.Generator, expression: exp.LastValue) -> str:
-    type = expression.parent.args.get("to").this.name
-
-    if type == "INT":
-        return self.func("JSON_EXTRACT_INT", expression.this, expression.expression)
-    elif type == "DOUBLE":
-        return self.func("JSON_EXTRACT_DOUBLE", expression.this, expression.expression)
-    elif type == "BIGINT":
-        return self.func("JSON_EXTRACT_BIGINT", expression.this, expression.expression)
-    elif type == "BOOLEAN":
-        return self.func("JSON_EXTRACT_BOOL", expression.this, expression.expression)
-    elif type == "DECIMAL":
-        return self.func("JSON_EXTRACT_DOUBLE", expression.this, expression.expression)
-    elif type == "NULL":
-        return self.func("JSON_EXTRACT_ISNULL", expression.this, expression.expression)
+    if "to" in expression.parent.args:
+        type = expression.parent.args.get("to").this.name
+        if type == "INT":
+            return self.func("JSON_EXTRACT_INT", expression.this, expression.expression)
+        elif type == "DOUBLE":
+            return self.func("JSON_EXTRACT_DOUBLE", expression.this, expression.expression)
+        elif type == "BIGINT":
+            return self.func("JSON_EXTRACT_BIGINT", expression.this, expression.expression)
+        elif type == "BOOLEAN":
+            return self.func("JSON_EXTRACT_BOOL", expression.this, expression.expression)
+        elif type == "DECIMAL":
+            return self.func("JSON_EXTRACT_DOUBLE", expression.this, expression.expression)
+        elif type == "NULL":
+            return self.func("JSON_EXTRACT_ISNULL", expression.this, expression.expression)
 
     return self.func("JSON_EXTRACT_STRING", expression.this, expression.expression)
 
