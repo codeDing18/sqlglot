@@ -284,7 +284,8 @@ class Hive(Dialect):
         "H": "%-H",
         "hh": "%I",
         "h": "%-I",
-        "mm": "%M",
+        # "mm": "%M",
+        "mm": "%i",
         "m": "%-M",
         "ss": "%S",
         "s": "%-S",
@@ -347,6 +348,10 @@ class Hive(Dialect):
 
         FUNCTIONS = {
             **parser.Parser.FUNCTIONS,
+            "FROM_TIMESTAMP": lambda args: build_formatted_time(exp.FromTimestamp, "hive", True)(
+                args or [exp.CurrentTimestamp()]
+            ),
+            # "FROM_TIMESTAMP": build_formatted_time(exp.FromTimestamp, "hive", True),
             "ASCII": exp.Unicode.from_arg_list,
             "BASE64": exp.ToBase64.from_arg_list,
             "BTRIM": exp.BTRIM.from_arg_list,

@@ -6114,6 +6114,10 @@ class BASE64ENCODE(Func):
 class BASE64DECODE(Func):
     pass
 
+class FromTimestamp(Func):
+    arg_types = {"this": True, "format": False}
+
+
 class MonthsBetween(Func):
     arg_types = {
         "first": True,
@@ -6595,8 +6599,8 @@ class Month(Func):
 class AddMonths(Func):
     arg_types = {"this": True, "expression": True}
 
-class FromTimestamp(Func):
-    arg_types = {"this": True, "expression": True}
+# class FromTimestamp(Func):
+#     arg_types = {"this": True, "expression": True}
 
 class Nvl2(Func):
     arg_types = {"this": True, "true": True, "false": False}
