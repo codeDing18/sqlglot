@@ -6111,6 +6111,11 @@ class ToBase64(Func):
 class BASE64ENCODE(Func):
     pass
 
+
+class NVL(Func):
+    arg_types = {"this": True, "expressions": False, "is_nvl": False, "is_null": False}
+    is_var_len_args = True
+
 class BASE64DECODE(Func):
     pass
 

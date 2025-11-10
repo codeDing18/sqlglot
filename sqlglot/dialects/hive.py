@@ -348,6 +348,7 @@ class Hive(Dialect):
 
         FUNCTIONS = {
             **parser.Parser.FUNCTIONS,
+            "NVL" : exp.NVL.from_arg_list,
             "FROM_TIMESTAMP": lambda args: build_formatted_time(exp.FromTimestamp, "hive", True)(
                 args or [exp.CurrentTimestamp()]
             ),
