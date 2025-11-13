@@ -137,6 +137,7 @@ class Doris(MySQL):
         TRANSFORMS = {
             **MySQL.Generator.TRANSFORMS,
             exp.NVL: rename_func("NVL"),
+            exp.IFNULL: rename_func("IFNULL"),
             exp.BASE64ENCODE: rename_func("TO_BASE64"),
             exp.BASE64DECODE: rename_func("FROM_BASE64"),
             exp.MonthsBetween: rename_func("MONTHS_DIFF"),
